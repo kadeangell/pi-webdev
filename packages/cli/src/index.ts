@@ -8,6 +8,7 @@ interface CliFlags {
   json: boolean;
   echo?: string;
   limit?: number;
+  session?: string;
   positional: string[];
 }
 
@@ -24,6 +25,13 @@ COMMANDS
   files list [GLOB] [--limit N]   List project files (default skip rules apply).
   files read PATH                 Read a file and print its content.
   files write PATH                Write a file. Content read from stdin.
+  browser open URL                Create a session and navigate to URL. Prints sessionId.
+  browser dom [--session ID]      Print innerText of the document.
+  browser eval EXPR               Evaluate EXPR in the current session.
+  browser click SELECTOR          Click an element.
+  browser fill SELECTOR VALUE     Fill an input.
+  browser console                 Dump captured console entries for the session.
+  browser close                   Close the current session.
   serve                           Run the orchestration server (no client).
 
 FLAGS
@@ -50,6 +58,7 @@ function parse(argv: string[]): CliFlags & { command: string } {
     else if (arg === "--json") { flags.json = true; }
     else if (arg === "--echo" && next) { flags.echo = next; i++; }
     else if (arg === "--limit" && next) { flags.limit = Number(next); i++; }
+    else if (arg === "--session" && next) { flags.session = next; i++; }
     else if (arg === "--help" || arg === "-h") { command = "help"; }
     else if (!command) { command = arg; }
     else { flags.positional.push(arg); }
@@ -132,6 +141,68 @@ export async function run(argv: string[]): Promise<number> {
         if (args.json) print("", { methods: result.capabilities.methods });
         else {
           for (const m of result.capabilities.methods) process.stdout.write(`  ${m}\n`);
+        }
+        break;
+      }
+
+      case "browser": {
+        const sub = args.positional[0];
+        const sessionIdArg = args.session;
+
+        const open = async (url: string): Promise<string> => {
+          const r = (await client.call("session.create", url ? { url } : {})) as { sessionId: string };
+          return r.sessionId;
+        };
+
+        if (sub === "open") {
+          const url = args.positional[1];
+          if (!url) throw new Error("browser open requires URL");
+          const id = await open(url);
+          if (args.json) print("", { sessionId: id, url });
+          else process.stdout.write(`${id}\n`);
+        } else if (sub === "dom") {
+          const url = args.positional[1];
+          const id = sessionIdArg ?? (url ? await open(url) : null);
+          if (!id) throw new Error("browser dom requires URL or --session");
+          const r = (await client.call("browser.dom", { sessionId: id, mode: "text" })) as { text: string };
+          if (args.json) print("", r);
+          else process.stdout.write(`${r.text}\n`);
+          if (!sessionIdArg) await client.call("session.close", { sessionId: id });
+        } else if (sub === "eval") {
+          // forms:  browser eval URL EXPR  (one-shot)  |  browser eval --session ID EXPR
+          const a = args.positional[1];
+          const b = args.positional[2];
+          const oneShot = !sessionIdArg && b !== undefined;
+          const id = sessionIdArg ?? (oneShot ? await open(a!) : null);
+          const expr = oneShot ? b! : a;
+          if (!id || !expr) throw new Error("browser eval requires URL EXPR or --session EXPR");
+          const r = (await client.call("browser.eval", { sessionId: id, expression: expr })) as { result?: unknown; exception?: { message: string } };
+          if (args.json) print("", r);
+          else if (r.exception) process.stdout.write(`exception: ${r.exception.message}\n`);
+          else process.stdout.write(`${typeof r.result === "string" ? r.result : JSON.stringify(r.result)}\n`);
+          if (!sessionIdArg) await client.call("session.close", { sessionId: id });
+        } else if (sub === "click") {
+          if (!sessionIdArg) throw new Error("browser click requires --session ID (use against a daemon)");
+          const selector = args.positional[1];
+          if (!selector) throw new Error("browser click requires SELECTOR");
+          await client.call("browser.click", { sessionId: sessionIdArg, selector });
+        } else if (sub === "fill") {
+          if (!sessionIdArg) throw new Error("browser fill requires --session ID");
+          const selector = args.positional[1];
+          const value = args.positional[2];
+          if (!selector || value === undefined) throw new Error("browser fill requires SELECTOR VALUE");
+          await client.call("browser.fill", { sessionId: sessionIdArg, selector, value });
+        } else if (sub === "console") {
+          if (!sessionIdArg) throw new Error("browser console requires --session ID");
+          const r = (await client.call("browser.console", { sessionId: sessionIdArg })) as { entries: Array<{ level: string; text: string }> };
+          if (args.json) print("", r);
+          else for (const e of r.entries) process.stdout.write(`[${e.level}] ${e.text}\n`);
+        } else if (sub === "close") {
+          if (!sessionIdArg) throw new Error("browser close requires --session ID");
+          const r = await client.call("session.close", { sessionId: sessionIdArg });
+          if (args.json) print("", r);
+        } else {
+          throw new Error(`unknown browser subcommand: ${sub ?? "(none)"}`);
         }
         break;
       }

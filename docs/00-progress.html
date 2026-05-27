@@ -25,9 +25,9 @@
 
 <h2><span class="num">0.1</span>Where we are</h2>
 
-<p>Phase 1, Week 1 is in — foundation skeleton plus the first real subsystem. A Node process boots the orchestration server, a client speaks WDP over WebSocket, handshakes via <code>$/initialize</code>, queries capabilities, lists project files, reads files, inspects subsystem state, and round-trips <code>$/ping</code>.</p>
+<p>Phase 1 Week 1 + Week 2 are in. The orchestration server speaks WDP over WebSocket, supervises two subsystems (in-process files, subprocess Lightpanda), and exposes sixteen methods. An LLM (or the human at the <code>pi-webdev</code> CLI) can navigate a real browser to a real URL, click and fill, read DOM, and observe console output — see <a href="09-demo.html#9.8">demo §9.8</a>.</p>
 
-<p>The smoke test (<code>pnpm smoke</code>) now asserts fourteen things end-to-end:</p>
+<p>The smoke test (<code>pnpm smoke</code>) now asserts twenty-three things end-to-end:</p>
 
 <ul>
   <li>Handshake completes with a capabilities snapshot.</li>
@@ -41,10 +41,20 @@
   <li>Path traversal outside the project root is rejected for both <code>files.read</code> and <code>files.write</code> (<code>10200 InvalidArgument</code>).</li>
   <li>Reading a nonexistent file returns <code>10100 NotFound</code>.</li>
   <li><code>files.write</code> + <code>files.read</code> round-trips a scratch file (with <code>createDirs</code>).</li>
+  <li>Browser engine and version come back through capabilities (Lightpanda 1.0.0-nightly).</li>
+  <li><code>session.create</code> opens a browser session with an optional initial URL.</li>
+  <li><code>session.list</code> includes the newly-created session.</li>
+  <li><code>browser.eval</code> returns <code>document.title</code> as a value-typed result.</li>
+  <li><code>browser.dom({mode:"text"})</code> returns the page's text content.</li>
+  <li><code>browser.click</code> dispatches a real click — verified by re-querying the mutated DOM.</li>
+  <li><code>browser.fill</code> dispatches input + change events — verified by re-querying the handler's output.</li>
+  <li><code>browser.console</code> replays captured console entries (subscribed via <code>Runtime.consoleAPICalled</code>).</li>
+  <li>Missing selector on <code>browser.click</code> returns <code>10100 NotFound</code>.</li>
+  <li><code>session.close</code> tears the session down (and CDP <code>Target.closeTarget</code> behind it).</li>
   <li>Calls before handshake return <code>-32001 HandshakeRequired</code> (covered by dispatcher tests, not asserted at the wire yet).</li>
 </ul>
 
-<p>And there's now a captured walkthrough in <a href="09-demo.html">section 09</a> showing the new <code>pi-webdev</code> CLI running against a fixture React project, with the orchestration server correctly detecting React 19 + Vite 7 + Vitest 3 + TypeScript 5 from one <code>package.json</code> read.</p>
+<p>And there's now a captured walkthrough in <a href="09-demo.html">section 09</a> showing the new <code>pi-webdev</code> CLI running against a fixture React project, with the orchestration server correctly detecting React 19 + Vite 7 + Vitest 3 + TypeScript 5 from one <code>package.json</code> read — plus the browser session flow against a tiny counter page.</p>
 
 <p>Measured RTT on a localhost connection: <strong>~0.5ms per ping</strong>. That's ~100× under the sub-50ms target in <a href="01-architecture.html">section 01</a>, which means the transport is nowhere near being the bottleneck. The bottleneck will be subsystems — and the in-process files subsystem confirms this: it adds <code>files.read</code> latency that's bounded by Node's <code>fs.readFile</code> rather than the protocol.</p>
 
@@ -63,7 +73,7 @@
     </tr>
     <tr>
       <td><code>@pi-webdev/server</code></td>
-      <td>HTTP/WebSocket transport, dispatcher with pre-initialize allow-list, subsystem registry (lifecycle + heartbeat), static capability detection, in-process files subsystem (read + list with glob, path-traversal guard, ignore list), <code>$/initialize</code>, <code>$/ping</code>, <code>session.capabilities</code>, <code>session.subsystems</code>, <code>files.read</code>, <code>files.list</code> handlers, <code>pi-webdev-server</code> CLI entrypoint.</td>
+      <td>HTTP/WebSocket transport, dispatcher with pre-initialize allow-list, subsystem registry (lifecycle + heartbeat), in-process files subsystem (read/list/write, glob, traversal-guarded), subprocess browser subsystem (Lightpanda + tiny CDP client; <code>navigate</code> / <code>dom</code> / <code>eval</code> / <code>click</code> / <code>fill</code> / <code>console</code>), session lifecycle (<code>create</code> / <code>list</code> / <code>close</code>), <code>session.capabilities</code>, <code>session.subsystems</code>, and the <code>pi-webdev-server</code> daemon CLI.</td>
     </tr>
     <tr>
       <td><code>@pi-webdev/coding-agent</code></td>
@@ -134,17 +144,35 @@ node packages/server/dist/bin.js --port 48710 --project-root .
 <p>Heartbeat runs in-process and trusts the subsystem to return <code>true</code>. Once subsystems are subprocesses, heartbeat needs to span process boundaries — probably a periodic <code>$/ping</code> on the internal stdio channel, with crash detection on EPIPE. That's a week-2 problem.</p>
 </div>
 
-<h2><span class="num">0.6</span>Next iteration</h2>
+<h2><span class="num">0.7</span>Week 2 — browser subsystem (Lightpanda)</h2>
 
-<p>The roadmap's week 2 target is the browser subsystem (Lightpanda integration, <code>browser.navigate</code> / <code>browser.dom</code> / <code>browser.eval</code>). Before touching Lightpanda we need to:</p>
+<p>Lightpanda 1.0.0-nightly is now wrapped as the first subprocess subsystem. The orchestration server spawns <code>lightpanda serve</code> on an ephemeral port, attaches via CDP <code>Target.createTarget</code> + <code>Target.attachToTarget(flatten:true)</code>, and exposes the five core browser methods (<code>navigate</code> / <code>dom</code> / <code>eval</code> / <code>click</code> / <code>fill</code>) plus <code>browser.console</code> and the session lifecycle (<code>session.create</code> / <code>list</code> / <code>close</code>).</p>
+
+<p>Full transcript and the captured CLI walkthrough live in <a href="09-demo.html#9.8">demo §9.8</a>. End-to-end Pi-session-style flow (open → eval → click → re-eval verifies state changed) works against a long-running daemon.</p>
+
+<h3>What was learned</h3>
+
+<p><strong>CDP's flatten mode is the right shape.</strong> Older CDP had two modes — browser-level connection plus per-target WebSockets — which is a hassle to multiplex. <code>Target.attachToTarget({flatten: true})</code> returns a session id that you stamp onto every subsequent message; one socket carries everything. The tiny in-tree <code>CdpClient</code> is ~140 lines and didn't need any other CDP plumbing.</p>
+
+<p><strong>Lightpanda has no layout, and we should be honest about it.</strong> <code>document.body.innerText</code> returns text without spacing — "smoke" + "click" comes back as <code>"smokeclick"</code>. For LLM use cases that's fine (the model can infer structure from the HTML), but it means we shouldn't pretend the browser surface gives you <em>rendered</em> text. <code>browser.dom({ mode: "text" })</code> documents this. <code>mode: "html"</code> returns <code>outerHTML</code> when the LLM wants the real source.</p>
+
+<p><strong>Subsystem availability is dynamic but advertised statically.</strong> If Lightpanda isn't in <code>PATH</code>, the server skips browser registration entirely — no <code>browser.*</code> methods in the dispatcher, no <code>browser</code> row in <code>session.subsystems</code>, and <code>capabilities.browser.engine</code> stays <code>"none"</code>. The LLM never sees half-broken state. When Lightpanda <em>is</em> present, capability fields fill in (engine, version, features, limitations) and the subsystem joins the registry's lifecycle.</p>
+
+<p><strong>The registry's subprocess flow worked first time.</strong> The supervision skeleton from week 1 (status transitions, broadcast events on state change) needed no changes to handle a real subprocess. <code>heartbeat()</code> returns <code>this.child !== null && this.cdp.isOpen()</code>; the registry handles the rest. Restart-with-backoff is still off, deliberately — no real crash data to tune it against yet.</p>
+
+<h3>What's still in §0.5 open questions</h3>
+
+<p>The three uncertainties from §0.5 stand. The Pi extension is still building against a stub host. Heartbeat across process boundaries works for "is the child alive" but not "is the child making progress" — fine for now, will need a real liveness probe (probably a periodic CDP <code>Browser.getVersion</code>) before we run untrusted pages.</p>
+
+<h2><span class="num">0.8</span>Next iteration</h2>
+
+<p>The roadmap's week 3 target is the file watcher + Vite adapter — chokidar-backed file watching, a JS/TS dependency graph from esbuild's scanner, and the first dev-server adapter so HMR events surface to the orchestration layer.</p>
 
 <ol>
-  <li>Build a subprocess-flavored subsystem to actually stress the registry's heartbeat + crash + restart paths. The files subsystem proved the in-process flow; the next subsystem needs to prove the subprocess flow. A trivial <code>EchoSubprocess</code> (Node child that responds to <code>$/ping</code> over stdio) is enough.</li>
-  <li>Pin the internal subsystem protocol (subsystem ↔ orchestration server) — almost certainly JSON-RPC over stdio, with a smaller method surface than WDP. Doc 05 implies it; we'll write it down.</li>
-  <li>Try Lightpanda against a real React project (roadmap §7.8 step 2). The go/no-go from <a href="04-browser.html">doc 04</a> should run on a real artifact, not on hope.</li>
+  <li>Promote the in-process <code>FilesSubsystem</code>: add chokidar, emit <code>files.changed</code> events, implement <code>files.depGraph({ entry })</code> by walking imports with esbuild's metafile.</li>
+  <li>Vite adapter: detect a running Vite dev server (via its WebSocket HMR channel), translate <code>vite:beforeUpdate</code> / <code>vite:afterUpdate</code> into WDP <code>hmr.update</code> events, and connect Lightpanda to the Vite-served page rather than a static fixture.</li>
+  <li>The first turn-digest sketch (doc 03 §3.4) — even a noisy, ugly version — so we can measure what events the LLM actually wants to see vs. ignore.</li>
 </ol>
-
-<p>After that, Phase 0's three-browser-tools spike from roadmap §7.0 is essentially free — once the browser subsystem boundary is real, <code>browser.navigate</code> / <code>browser.dom</code> / <code>browser.eval</code> are thin dispatcher entries.</p>
 
 <nav class="nav-foot">
   <a href="../index.html">
