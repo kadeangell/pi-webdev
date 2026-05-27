@@ -212,9 +212,41 @@ node packages/server/dist/bin.js --port 48710 --project-root .
 
 <p><strong>"Affected tests" is a thin wrapper around <code>files.depGraph</code>.</strong> The Pi extension can call <code>files.depGraph({entry: changedFile})</code>, walk the reverse edges, find tests that import the changed module, and pass that list as <code>test.run({files})</code>. We don't need a special "affected" mode in the test runner subsystem itself; the dep graph is the primitive.</p>
 
-<h2><span class="num">0.14</span>Next iteration</h2>
+<h2><span class="num">0.14</span>Week 7 — React introspection</h2>
 
-<p>Week 7 — React DevTools backend integration. Inject <code>react-devtools-core</code> backend into pages opened in the browser subsystem; bridge to the orchestration server via a WebSocket; expose <code>inspect.componentTree</code> / <code>inspect.props</code> / <code>inspect.state</code>. Stable component IDs via path + name + key hash.</p>
+<p>The differentiating feature shipped. <code>inspect.componentTree</code>, <code>inspect.componentByQuery</code>, <code>inspect.props</code>, and <code>inspect.state</code> all work against real React 19 running inside Lightpanda. Verified end-to-end in the smoke test: a Counter component with <code>useState(7)</code> shows up as a node, its <code>initial=7</code> prop comes back through <code>inspect.props</code>, and <code>inspect.state</code> reports <code>hooks[0].value = 7</code>.</p>
+
+<h3>What was learned</h3>
+
+<p><strong>react-devtools-core isn't the right primitive.</strong> The plan in <a href="06-framework-introspection.html">section 06</a> envisaged shipping the official DevTools backend in-page and bridging to it over a WebSocket. In practice, the backend wants a frontend that speaks its bridge protocol — a frontend we'd have to either embed or stub. The shorter path: a ~150-line in-page script that pre-installs <code>__REACT_DEVTOOLS_GLOBAL_HOOK__</code>, captures roots in <code>onCommitFiberRoot</code>, and exposes <code>window.__piWebdev.tree/props/state</code> as plain functions. The WDP methods become single Runtime.evaluate calls. Far less surface area, no third-party protocol.</p>
+
+<p><strong>Pre-document injection is the unlock.</strong> Initially we tried <code>Runtime.evaluate</code> the inspector after navigate fired <code>Page.loadEventFired</code>. The hook landed too late: React had already module-initialized with whatever placeholder hook it found (or none) and never called our <code>onCommitFiberRoot</code>. Lightpanda turns out to support <code>Page.addScriptToEvaluateOnNewDocument</code>; once we install via that CDP method, the inspector lands before React's bundle evaluates and every commit gets captured.</p>
+
+<p><strong>Stable IDs make the LLM's job easier.</strong> Hashing <code>path/from/root/ComponentName[key]</code> as the id means turn N's "give me Counter's props" and turn N+1's "give me Counter's props again" land on the same id even if siblings rearranged. The plan's stable-id concern from <a href="06-framework-introspection.html">doc 06</a> turned out to be straightforward in practice: djb2 over the path string is enough.</p>
+
+<p><strong>Hook values are best-effort but useful.</strong> Function components' <code>memoizedState</code> is a linked list of opaque <code>{memoizedState, queue, next}</code> objects. We walk it and report each as <code>{index, value}</code> — no source-map analysis, so the LLM sees <code>hooks[0]=7</code> rather than <code>count=7</code>. Doc 06 §6.4 anticipated this and reserved named-hook extraction for 0.2.</p>
+
+<h2><span class="num">0.15</span>Where the 8-week MVP stands</h2>
+
+<p>Weeks 1–7 are in:</p>
+
+<table>
+  <thead>
+    <tr><th>Week</th><th>Deliverable</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>Foundation skeleton (transport, dispatcher, handshake, subsystem registry)</td><td>✓ done</td></tr>
+    <tr><td>2</td><td>Browser subsystem — Lightpanda + tiny CDP client + session lifecycle</td><td>✓ done</td></tr>
+    <tr><td>3</td><td>File watcher (chokidar) + dep graph (esbuild) + Vite adapter</td><td>✓ done</td></tr>
+    <tr><td>4</td><td>env.digest + per-turn injection</td><td>✓ done</td></tr>
+    <tr><td>5</td><td>TypeScript LSP (tsserver)</td><td>✓ done</td></tr>
+    <tr><td>6</td><td>Vitest + ESLint subsystems</td><td>✓ done</td></tr>
+    <tr><td>7</td><td>React component introspection — the differentiating feature</td><td>✓ done</td></tr>
+    <tr><td>8</td><td><code>pi-webdev init</code>, daemon installer, public 0.1 release</td><td>not started</td></tr>
+  </tbody>
+</table>
+
+<p>The smoke test asserts 37 things end-to-end. The orchestration server registers 34 WDP methods across six subsystems (files, browser, vite, tsserver, vitest, eslint). Roughly 4,300 LOC of TypeScript across five packages.</p>
 
 <nav class="nav-foot">
   <a href="../index.html">

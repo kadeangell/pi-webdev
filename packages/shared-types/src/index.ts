@@ -9,5 +9,6 @@ export * from "./methods/build.js";
 export * from "./methods/env.js";
 export * from "./methods/types.js";
 export * from "./methods/test-lint.js";
+export * from "./methods/inspect.js";
 export const PROTOCOL_VERSION = "0.1.0";
 export const SUPPORTED_VERSIONS = ["0.x"] as const;
