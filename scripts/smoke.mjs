@@ -160,6 +160,63 @@ try {
   console.log(`[smoke] files.write traversal correctly rejected (code ${err.code})`);
 }
 
+// Week 3 — file watcher event broadcast.
+{
+  const observed = [];
+  const unsub = client.on("files.changed", (params) => {
+    if (params?.entries) observed.push(...params.entries);
+  });
+  await client.call("files.write", { path: ".smoke-tmp/watcher-probe.txt", content: "hello watcher", createDirs: true });
+  // Wait up to 1.5s for the chokidar event to flush.
+  const deadline = Date.now() + 1500;
+  while (Date.now() < deadline && !observed.some((e) => e.path.endsWith("watcher-probe.txt"))) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  unsub();
+  const hit = observed.find((e) => e.path.endsWith("watcher-probe.txt"));
+  assert.ok(hit, `expected files.changed for watcher-probe.txt; got ${JSON.stringify(observed)}`);
+  console.log(`[smoke] files.changed event ok — ${hit.kind} ${hit.path}`);
+}
+
+// Week 3 — files.changedSince ring-buffer query.
+{
+  const since = new Date(Date.now() - 60_000).toISOString();
+  const r = await client.call("files.changedSince", { since });
+  assert.ok(Array.isArray(r.changes), "changedSince returns changes array");
+  assert.ok(r.changes.some((e) => e.path.endsWith("watcher-probe.txt")), "watcher-probe in changedSince");
+  console.log(`[smoke] files.changedSince ok — ${r.changes.length} change(s), cursor=${r.cursor}`);
+}
+
+// Week 3 — files.depGraph on the smoke script itself (a single-file module).
+{
+  // Write a tiny test entry so we don't depend on existing fixtures' install state.
+  await client.call("files.write", {
+    path: ".smoke-tmp/dep-a.js",
+    content: "export const a = 1; import { b } from './dep-b.js'; console.log(a, b);",
+    createDirs: true,
+  });
+  await client.call("files.write", {
+    path: ".smoke-tmp/dep-b.js",
+    content: "export const b = 2;",
+    createDirs: true,
+  });
+  const r = await client.call("files.depGraph", { entry: ".smoke-tmp/dep-a.js" });
+  assert.ok(r.graph.nodes.length >= 2, `expected ≥2 nodes; got ${r.graph.nodes.length}`);
+  assert.ok(
+    r.graph.edges.some((e) => e.to.includes("dep-b") || e.from.includes("dep-a")),
+    `expected edge involving dep-b; got ${JSON.stringify(r.graph.edges)}`,
+  );
+  console.log(`[smoke] files.depGraph ok — ${r.graph.nodes.length} nodes, ${r.graph.edges.length} edges`);
+}
+
+// Week 3 — build.status disconnected (no Vite running in smoke env).
+{
+  const status = await client.call("build.status", {});
+  assert.equal(status.adapter, "vite", "build.status adapter");
+  assert.ok(["disconnected", "error", "connecting"].includes(status.state), `state was ${status.state}`);
+  console.log(`[smoke] build.status ok — ${status.state} (no vite running, as expected)`);
+}
+
 // Browser subsystem checks — skipped if Lightpanda wasn't detected at startup.
 const hasBrowser = caps.capabilities.methods.includes("browser.navigate");
 if (!hasBrowser) {

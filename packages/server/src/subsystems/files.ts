@@ -1,8 +1,16 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import path from "node:path";
+import chokidar, { type FSWatcher } from "chokidar";
+import * as esbuild from "esbuild";
 import {
   ErrorCodes,
   WdpError,
+  type FilesChangeEntry,
+  type FilesChangedSinceParams,
+  type FilesChangedSinceResult,
+  type FilesDepGraphParams,
+  type FilesDepGraphResult,
   type FilesListParams,
   type FilesListResult,
   type FilesReadParams,
@@ -29,27 +37,171 @@ const MAX_READ_BYTES = 1 * 1024 * 1024; // 1 MiB cap per read
 const DEFAULT_LIST_LIMIT = 1000;
 const MAX_LIST_LIMIT = 5000;
 
+const RING_BUFFER_LIMIT = 1000;
+const COALESCE_WINDOW_MS = 100;
+
 export class FilesSubsystem implements Subsystem {
   readonly name = "files";
+  /** Emits `changed` (FilesChangeEntry[]) when coalesced events flush. */
+  readonly events = new EventEmitter();
   private ready = false;
+  private watcher: FSWatcher | null = null;
+  private ring: FilesChangeEntry[] = [];
+  private pendingBuffer: FilesChangeEntry[] = [];
+  private flushTimer: NodeJS.Timeout | null = null;
+  private sequence = 0;
 
   constructor(private readonly projectRoot: string) {}
 
   async start(): Promise<void> {
-    // Sanity: project root exists and is a directory.
     const st = await stat(this.projectRoot).catch(() => null);
     if (!st || !st.isDirectory()) {
       throw new Error(`projectRoot is not a directory: ${this.projectRoot}`);
     }
+    // Chokidar watch — the ignore list is intentionally narrower than
+    // `files.list`'s: hidden dotfiles can still be interesting to the LLM
+    // (.env edits, .gitignore changes), so only large/unhelpful trees are
+    // skipped here.
+    this.watcher = chokidar.watch(this.projectRoot, {
+      ignoreInitial: true,
+      ignored: (p: string) => {
+        const rel = path.relative(this.projectRoot, p);
+        if (!rel || rel === "") return false;
+        const first = rel.split(path.sep)[0]!;
+        return DEFAULT_IGNORE.has(first);
+      },
+      // Polling is the most reliable across container/overlay filesystems.
+      usePolling: process.env.PI_WEBDEV_POLL !== "0",
+      interval: 50,
+    });
+    const handle = (kind: FilesChangeEntry["kind"]) => (raw: string) => {
+      const rel = path.relative(this.projectRoot, raw);
+      // chokidar may surface paths outside root on macOS symlink follow; skip those.
+      if (rel.startsWith("..") || path.isAbsolute(rel)) return;
+      this.bufferChange({ path: rel, kind, timestamp: new Date().toISOString() });
+    };
+    this.watcher
+      .on("add", handle("add"))
+      .on("change", handle("change"))
+      .on("unlink", handle("unlink"))
+      .on("addDir", handle("addDir"))
+      .on("unlinkDir", handle("unlinkDir"));
+    // Wait for the initial scan to complete so subsequent events are real changes.
+    await new Promise<void>((resolve) => this.watcher!.once("ready", resolve));
     this.ready = true;
   }
 
   async stop(): Promise<void> {
     this.ready = false;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.pendingBuffer = [];
+    if (this.watcher) {
+      await this.watcher.close().catch(() => undefined);
+      this.watcher = null;
+    }
   }
 
   heartbeat(): boolean {
     return this.ready;
+  }
+
+  private bufferChange(entry: FilesChangeEntry): void {
+    this.pendingBuffer.push(entry);
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => this.flushChanges(), COALESCE_WINDOW_MS);
+    this.flushTimer.unref?.();
+  }
+
+  private flushChanges(): void {
+    this.flushTimer = null;
+    if (this.pendingBuffer.length === 0) return;
+    // Coalesce — collapse repeats of the same path+kind in the window.
+    const seen = new Map<string, FilesChangeEntry>();
+    for (const e of this.pendingBuffer) {
+      seen.set(`${e.kind}:${e.path}`, e);
+    }
+    this.pendingBuffer = [];
+    const coalesced = [...seen.values()];
+    for (const e of coalesced) {
+      this.ring.push(e);
+      this.sequence += 1;
+    }
+    if (this.ring.length > RING_BUFFER_LIMIT) {
+      this.ring.splice(0, this.ring.length - RING_BUFFER_LIMIT);
+    }
+    this.events.emit("changed", coalesced);
+  }
+
+  changedSince(params: FilesChangedSinceParams): FilesChangedSinceResult {
+    if (!this.ready) throw new WdpError(ErrorCodes.SubsystemNotReady, "files subsystem not ready");
+    const since = Date.parse(params.since);
+    if (Number.isNaN(since)) throw new WdpError(ErrorCodes.InvalidParams, "since must be an ISO timestamp");
+    const limit = Math.min(params.limit ?? 200, 1000);
+    const prefix = params.pathPrefix ?? "";
+    const matches = this.ring.filter(
+      (e) => Date.parse(e.timestamp) > since && (prefix === "" || e.path.startsWith(prefix)),
+    );
+    const truncated = matches.length > limit;
+    const slice = matches.slice(-limit);
+    const cursor = (slice[slice.length - 1]?.timestamp) ?? params.since;
+    return { changes: slice, cursor, truncated };
+  }
+
+  async depGraph(params: FilesDepGraphParams): Promise<FilesDepGraphResult> {
+    if (!this.ready) throw new WdpError(ErrorCodes.SubsystemNotReady, "files subsystem not ready");
+    if (!params?.entry) throw new WdpError(ErrorCodes.InvalidParams, "files.depGraph requires entry: string");
+    const absEntry = this.resolveInsideRoot(params.entry);
+    let metafile: esbuild.Metafile;
+    const warnings: string[] = [];
+    try {
+      const result = await esbuild.build({
+        entryPoints: [absEntry],
+        absWorkingDir: this.projectRoot,
+        bundle: true,
+        write: false,
+        metafile: true,
+        platform: "browser",
+        format: "esm",
+        target: "es2022",
+        logLevel: "silent",
+        jsx: "automatic",
+        loader: { ".tsx": "tsx", ".ts": "ts", ".jsx": "jsx", ".js": "js", ".css": "empty", ".svg": "empty" },
+        plugins: [
+          {
+            // Skip resolving anything that isn't a relative or absolute path —
+            // node_modules and bare specifiers become external edges.
+            name: "wdp-mark-external",
+            setup(build) {
+              build.onResolve({ filter: /^[^./]/ }, (args) => ({
+                path: args.path,
+                external: true,
+              }));
+            },
+          },
+        ],
+      });
+      metafile = result.metafile!;
+    } catch (err) {
+      throw new WdpError(
+        ErrorCodes.ToolError,
+        `dep graph failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const nodes = Object.entries(metafile.inputs).map(([id, info]) => ({ id, bytes: info.bytes }));
+    const edges: { from: string; to: string; kind: "import" | "dynamic" }[] = [];
+    for (const [id, info] of Object.entries(metafile.inputs)) {
+      for (const imp of info.imports) {
+        edges.push({ from: id, to: imp.path, kind: imp.kind === "dynamic-import" ? "dynamic" : "import" });
+      }
+    }
+    return {
+      entry: path.relative(this.projectRoot, absEntry),
+      graph: { nodes, edges },
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   /** Resolve a project-relative or absolute path, refusing anything outside root. */
@@ -218,4 +370,10 @@ export function registerFilesSubsystem(
   dispatcher.register<FilesReadParams, FilesReadResult>("files.read", (p) => files.read(p));
   dispatcher.register<FilesListParams, FilesListResult>("files.list", (p) => files.list(p ?? {}));
   dispatcher.register<FilesWriteParams, FilesWriteResult>("files.write", (p) => files.write(p));
+  dispatcher.register<FilesChangedSinceParams, FilesChangedSinceResult>(
+    "files.changedSince", (p) => files.changedSince(p),
+  );
+  dispatcher.register<FilesDepGraphParams, FilesDepGraphResult>(
+    "files.depGraph", (p) => files.depGraph(p),
+  );
 }
