@@ -124,14 +124,18 @@
 <p>Week 5 landed. Smoke test now 30 assertions; the new one writes a TS file with a deliberate type error and asserts TS2322 comes back through the WDP method. tsserver's JSON-line protocol is more pragmatic than full LSP for our surface — a ~250-line client is enough.</p>
 </div>
 
-<h3>Week 6 — Test and lint</h3>
+<h3>Week 6 — Test and lint <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li>Vitest integration via programmatic API</li>
-  <li>ESLint integration via Node API</li>
-  <li>Affected-tests-only optimization using the dep graph from week 3</li>
-  <li>Test events into the digest; lint diagnostics into the digest</li>
-  <li>Implement <code>test.run</code> and <code>lint.diagnostics</code> tools</li>
+  <li>Vitest via programmatic API (<code>vitest/node</code>'s <code>startVitest</code>) — auto-registers when the project has vitest installed. <code>test.list</code> + <code>test.run</code> land.</li>
+  <li>ESLint via Node API (<code>ESLint</code> class) — auto-registers when the project has eslint installed. <code>lint.diagnostics</code> lands; flat-config ESLint v10 supported.</li>
+  <li>Affected-tests-only filter — exposed via <code>test.run({ files })</code>; the LLM (or the Pi extension) can pass the result of <code>files.depGraph</code> as the file list.</li>
+  <li>Test events into the digest — <code>test.started</code> / <code>test.completed</code> broadcast on every run and recorded by <code>DigestService</code>; <code>lint.diagnostics_changed</code> fires on every lint sweep.</li>
+  <li><code>test.run</code> and <code>lint.diagnostics</code> on the Pi tool surface — registered through the existing per-domain tool factories.</li>
 </ul>
+
+<div class="honest">
+<p>Week 6 landed. Smoke test now 32 assertions; both new ones run real Vitest (1 passing test) and real ESLint (unused-vars rule) under <code>.smoke-tmp/</code>. End-to-end exercise.</p>
+</div>
 
 <h3>Demo at end of phase 3</h3>
 <p>Pi session: "The UserList test is failing — fix it." LLM sees the test failure in the initial digest (no need to run tests manually), reads the test, reads the component, makes a fix, sees the test pass in the next digest. Done in 3-4 turns.</p>

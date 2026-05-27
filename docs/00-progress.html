@@ -202,9 +202,19 @@ node packages/server/dist/bin.js --port 48710 --project-root .
 
 <p><strong>Async diagnostics need event-driven completion.</strong> First sketch awaited <code>geterr</code>'s response — but tsserver returns the response immediately with no body, then streams the actual diagnostics as events, then emits <code>requestCompleted</code>. The client now keeps a small map of "geterr in flight" promises that resolve on the completion event, with a 5s safety timeout.</p>
 
-<h2><span class="num">0.13</span>Next iteration</h2>
+<h2><span class="num">0.13</span>Week 6 — test runner + lint</h2>
 
-<p>Week 6 — test runner + lint. Vitest via its programmatic API; ESLint via its Node API. Affected-tests filtering uses the dep graph from week 3. Test + lint events into the digest.</p>
+<p>Vitest and ESLint are now in-process subsystems, auto-registered when the package is present in the project's <code>node_modules</code>. <code>test.run({files?})</code> runs the named test files (or globs) via Vitest's <code>startVitest("test", filters, {run:true})</code>; <code>test.list</code> uses <code>globTestSpecifications</code>. <code>lint.diagnostics({files?})</code> calls <code>ESLint.lintFiles(targets)</code>. Both broadcast events on completion so the digest can show "tests: 1 changed (UserList.test — was passing, now failing)" deltas.</p>
+
+<h3>What was learned</h3>
+
+<p><strong>Vitest's Node API is the right boundary.</strong> Earlier sketches considered spawning <code>vitest run</code> as a subprocess and parsing its stdout — fragile and slow. The Node API gives structured access to tasks, results, and errors, which is exactly what the LLM needs: structured failures with file paths and messages, not parsed test runner output. Same logic applies to ESLint: <code>ESLint.lintFiles</code> returns structured results.</p>
+
+<p><strong>"Affected tests" is a thin wrapper around <code>files.depGraph</code>.</strong> The Pi extension can call <code>files.depGraph({entry: changedFile})</code>, walk the reverse edges, find tests that import the changed module, and pass that list as <code>test.run({files})</code>. We don't need a special "affected" mode in the test runner subsystem itself; the dep graph is the primitive.</p>
+
+<h2><span class="num">0.14</span>Next iteration</h2>
+
+<p>Week 7 — React DevTools backend integration. Inject <code>react-devtools-core</code> backend into pages opened in the browser subsystem; bridge to the orchestration server via a WebSocket; expose <code>inspect.componentTree</code> / <code>inspect.props</code> / <code>inspect.state</code>. Stable component IDs via path + name + key hash.</p>
 
 <nav class="nav-foot">
   <a href="../index.html">
