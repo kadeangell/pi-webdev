@@ -18,6 +18,12 @@ import { BrowserSubsystem, registerBrowserSubsystem } from "./subsystems/browser
 import { ViteAdapter, registerViteAdapter } from "./subsystems/vite.js";
 import { TsServerSubsystem, registerTsServerSubsystem } from "./subsystems/tsserver.js";
 import {
+  EslintSubsystem,
+  VitestSubsystem,
+  registerEslintSubsystem,
+  registerVitestSubsystem,
+} from "./subsystems/test-lint.js";
+import {
   BuildEventMethods,
   EventMethods,
   type EnvDetectFrameworkResult,
@@ -103,6 +109,23 @@ export class Server {
     files.events.on("changed", (entries: FilesChangeEntry[]) => {
       this.broadcast("files.changed", { entries });
     });
+
+    // Vitest — auto-registers when project has vitest installed.
+    if (hasProjectModule(this.opts.projectRoot, "vitest")) {
+      const vitest = new VitestSubsystem(this.opts.projectRoot);
+      this.subsystems.register(vitest);
+      registerVitestSubsystem(this.dispatcher, vitest);
+      vitest.events.on("started", (p) => this.broadcast("test.started", p));
+      vitest.events.on("completed", (p) => this.broadcast("test.completed", p));
+    }
+
+    // ESLint — auto-registers when project has eslint installed.
+    if (hasProjectModule(this.opts.projectRoot, "eslint")) {
+      const lint = new EslintSubsystem(this.opts.projectRoot);
+      this.subsystems.register(lint);
+      registerEslintSubsystem(this.dispatcher, lint);
+      lint.events.on("changed", (p) => this.broadcast("lint.diagnostics_changed", p));
+    }
 
     // TypeScript LSP — auto-registers when tsserver is resolvable (any
     // ts/tsx file or tsconfig in the project will exercise it).
@@ -290,6 +313,16 @@ function resolveInPath(name: string): string | null {
     }
   }
   return null;
+}
+
+function hasProjectModule(projectRoot: string, name: string): boolean {
+  if (existsSync(path.join(projectRoot, "node_modules", name))) return true;
+  try {
+    localRequire.resolve(name);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveTsserverScript(projectRoot: string): string | null {
