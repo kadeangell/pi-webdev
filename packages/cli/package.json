@@ -1,0 +1,21 @@
+{
+  "name": "@pi-webdev/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "pi-webdev": "./dist/bin.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pi-webdev/shared-types": "workspace:*",
+    "@pi-webdev/server": "workspace:*",
+    "@pi-webdev/coding-agent": "workspace:*"
+  }
+}

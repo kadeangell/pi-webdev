@@ -167,6 +167,28 @@ pre code {
 ul, ol { margin: 0 0 1.5rem; padding-left: 1.5rem; }
 li { margin: 0.4rem 0; }
 
+/* Terminal block — for captured shell sessions in the demo doc. */
+.term {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--code-bg);
+  padding: 1.1rem 1.25rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  margin: 1.25rem 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.term .prompt { color: var(--accent); user-select: none; }
+.term .cmd { color: var(--text); }
+.term .out { color: var(--muted); }
+.term .ok { color: #2f7a3c; }
+@media (prefers-color-scheme: dark) {
+  .term .ok { color: #8acb98; }
+}
+.term .comment { color: var(--soft); font-style: italic; }
+
 hr {
   border: 0;
   height: 1px;

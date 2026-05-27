@@ -112,6 +112,29 @@ try {
   console.log(`[smoke] missing file correctly NotFound (code ${err.code})`);
 }
 
+// files.write round-trip: write a scratch file under a tmp dir, read it back.
+const scratchPath = `.smoke-tmp/hello.txt`;
+const scratchBody = `hello at ${new Date().toISOString()}`;
+const writeResult = await client.call("files.write", {
+  path: scratchPath,
+  content: scratchBody,
+  createDirs: true,
+});
+assert.equal(writeResult.bytesWritten, Buffer.byteLength(scratchBody, "utf8"), "write byte count");
+assert.ok(writeResult.path.endsWith("hello.txt"), "write echoes relative path");
+const readBack = await client.call("files.read", { path: scratchPath });
+assert.equal(readBack.content, scratchBody, "round-trip content");
+console.log(`[smoke] files.write round-trip ok — ${writeResult.bytesWritten}B at ${writeResult.path}`);
+
+// Path traversal must be blocked on write too.
+try {
+  await client.call("files.write", { path: "../escape.txt", content: "nope" });
+  throw new Error("write traversal should have been rejected");
+} catch (err) {
+  assert.equal(err.code, 10200, "InvalidArgument for write traversal");
+  console.log(`[smoke] files.write traversal correctly rejected (code ${err.code})`);
+}
+
 await client.close();
 await server.stop();
 console.log("[smoke] foundation green ✓");

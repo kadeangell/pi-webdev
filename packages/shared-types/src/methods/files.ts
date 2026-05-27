@@ -32,3 +32,16 @@ export interface FilesListResult {
   /** True when the listing was truncated by the limit. */
   truncated: boolean;
 }
+
+export interface FilesWriteParams {
+  path: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  /** Create parent directories if missing. Defaults to false. */
+  createDirs?: boolean;
+}
+export interface FilesWriteResult {
+  path: string;
+  bytesWritten: number;
+  created: boolean;
+}

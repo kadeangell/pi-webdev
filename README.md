@@ -27,16 +27,19 @@ Requires Node 22+ and pnpm 10+.
 ```sh
 pnpm install
 pnpm -r run build
-pnpm smoke                   # end-to-end round-trip test
+pnpm smoke                   # 14-assertion end-to-end test
 ```
 
-Manually:
+The `pi-webdev` CLI talks to a running server, or boots an in-process one with `--auto`:
 
 ```sh
-node packages/server/dist/bin.js --port 48710 --project-root .
+node packages/cli/dist/bin.js --auto --project-root examples/counter-app caps
+node packages/cli/dist/bin.js --auto --project-root examples/counter-app files list "**/*.tsx"
+node packages/cli/dist/bin.js --auto ping --echo hello
+node packages/cli/dist/bin.js serve --port 48710 --project-root .
 ```
 
-The smoke test boots the server on an ephemeral port, opens a WDP client, completes `$/initialize`, calls `$/ping`, and asserts handshake / error semantics. RTT on localhost: ~0.5ms per ping.
+See [`docs/09-demo.html`](docs/09-demo.html) for a captured walkthrough against the bundled React fixture (`examples/counter-app/`). RTT on localhost: ~0.5ms per ping.
 
 ## Structure
 
@@ -59,16 +62,20 @@ pi-webdev/
 │   ├── 05-subsystems.html        File watcher, LSP, dev server, test/lint
 │   ├── 06-framework-introspection.html  React DevTools backend integration
 │   ├── 07-roadmap.html           Eight-week MVP, phased
-│   └── 08-risks.html             Where the plan is fragile
+│   ├── 08-risks.html             Where the plan is fragile
+│   └── 09-demo.html              Captured CLI walkthrough against the React fixture
+├── examples/
+│   └── counter-app/          Vite + React 19 + Vitest fixture for capability detection
 └── packages/
     ├── shared-types/         @pi-webdev/shared-types — WDP wire types, errors, caps
     ├── server/               @pi-webdev/server       — orchestration daemon
-    └── pi-extension/         @pi-webdev/coding-agent — Pi-side tools + WDP client
+    ├── pi-extension/         @pi-webdev/coding-agent — Pi-side tools + WDP client
+    └── cli/                  @pi-webdev/cli          — pi-webdev binary
 ```
 
 ## Status
 
-**v0.1 — foundation in, subsystems pending.** The transport, dispatcher, handshake, and capability detection are working. No real subsystems yet: the browser, file watcher, LSP, test runner, and framework introspection are still on the roadmap (Weeks 2–7).
+**v0.1 — foundation in, browser subsystem pending.** Seven WDP methods working end-to-end (`$/initialize`, `$/ping`, `session.capabilities`, `session.subsystems`, `files.read`, `files.write`, `files.list`). The browser, dev-server adapter, LSP, test runner, and framework introspection are still on the roadmap (Weeks 2–7).
 
 Every section flags places of uncertainty inline with "Open question" callouts. Section 08 collects the most important ones for the spike phase.
 

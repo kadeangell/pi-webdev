@@ -27,7 +27,7 @@
 
 <p>Phase 1, Week 1 is in — foundation skeleton plus the first real subsystem. A Node process boots the orchestration server, a client speaks WDP over WebSocket, handshakes via <code>$/initialize</code>, queries capabilities, lists project files, reads files, inspects subsystem state, and round-trips <code>$/ping</code>.</p>
 
-<p>The smoke test (<code>pnpm smoke</code>) now asserts twelve things end-to-end:</p>
+<p>The smoke test (<code>pnpm smoke</code>) now asserts fourteen things end-to-end:</p>
 
 <ul>
   <li>Handshake completes with a capabilities snapshot.</li>
@@ -38,10 +38,13 @@
   <li><code>session.capabilities</code> re-exposes the handshake snapshot with the live method list.</li>
   <li><code>files.list</code> walks the project, skipping <code>node_modules</code> / <code>.git</code> / <code>dist</code> / etc., and filters by glob.</li>
   <li><code>files.read</code> returns utf8 content with byte length and truncation flag.</li>
-  <li>Path traversal outside the project root is rejected (<code>10200 InvalidArgument</code>).</li>
+  <li>Path traversal outside the project root is rejected for both <code>files.read</code> and <code>files.write</code> (<code>10200 InvalidArgument</code>).</li>
   <li>Reading a nonexistent file returns <code>10100 NotFound</code>.</li>
+  <li><code>files.write</code> + <code>files.read</code> round-trips a scratch file (with <code>createDirs</code>).</li>
   <li>Calls before handshake return <code>-32001 HandshakeRequired</code> (covered by dispatcher tests, not asserted at the wire yet).</li>
 </ul>
+
+<p>And there's now a captured walkthrough in <a href="09-demo.html">section 09</a> showing the new <code>pi-webdev</code> CLI running against a fixture React project, with the orchestration server correctly detecting React 19 + Vite 7 + Vitest 3 + TypeScript 5 from one <code>package.json</code> read.</p>
 
 <p>Measured RTT on a localhost connection: <strong>~0.5ms per ping</strong>. That's ~100× under the sub-50ms target in <a href="01-architecture.html">section 01</a>, which means the transport is nowhere near being the bottleneck. The bottleneck will be subsystems — and the in-process files subsystem confirms this: it adds <code>files.read</code> latency that's bounded by Node's <code>fs.readFile</code> rather than the protocol.</p>
 
@@ -65,6 +68,10 @@
     <tr>
       <td><code>@pi-webdev/coding-agent</code></td>
       <td>Thin <code>WdpClient</code> (uses Node 22's built-in <code>WebSocket</code>), a Pi-extension stub (no hard Pi dependency yet), and the <code>wdp.ping</code> / <code>wdp.filesRead</code> / <code>wdp.filesList</code> tools wired to the corresponding WDP methods.</td>
+    </tr>
+    <tr>
+      <td><code>@pi-webdev/cli</code></td>
+      <td><code>pi-webdev</code> binary. <code>--auto</code> boots an ephemeral in-process server; otherwise connects to <code>--url</code>. Subcommands: <code>ping</code>, <code>caps</code>, <code>subsystems</code>, <code>methods</code>, <code>files list|read|write</code>, <code>serve</code>. <code>--json</code> for machine-readable output. Used to capture the demo walkthrough in <a href="09-demo.html">section 09</a>.</td>
     </tr>
   </tbody>
 </table>

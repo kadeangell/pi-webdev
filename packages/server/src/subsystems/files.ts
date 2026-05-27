@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   ErrorCodes,
@@ -7,6 +7,8 @@ import {
   type FilesListResult,
   type FilesReadParams,
   type FilesReadResult,
+  type FilesWriteParams,
+  type FilesWriteResult,
 } from "@pi-webdev/shared-types";
 import type { Subsystem } from "./registry.js";
 import type { Dispatcher } from "../dispatcher.js";
@@ -104,6 +106,29 @@ export class FilesSubsystem implements Subsystem {
     };
   }
 
+  async write(params: FilesWriteParams): Promise<FilesWriteResult> {
+    if (!this.ready) throw new WdpError(ErrorCodes.SubsystemNotReady, "files subsystem not ready");
+    if (!params?.path || typeof params.path !== "string") {
+      throw new WdpError(ErrorCodes.InvalidParams, "files.write requires path: string");
+    }
+    if (typeof params.content !== "string") {
+      throw new WdpError(ErrorCodes.InvalidParams, "files.write requires content: string");
+    }
+    const abs = this.resolveInsideRoot(params.path);
+    const existed = (await stat(abs).catch(() => null)) !== null;
+    if (params.createDirs) {
+      await mkdir(path.dirname(abs), { recursive: true });
+    }
+    const encoding = params.encoding ?? "utf8";
+    const buf = encoding === "base64" ? Buffer.from(params.content, "base64") : Buffer.from(params.content, "utf8");
+    await writeFile(abs, buf);
+    return {
+      path: path.relative(this.projectRoot, abs),
+      bytesWritten: buf.length,
+      created: !existed,
+    };
+  }
+
   async list(params: FilesListParams = {}): Promise<FilesListResult> {
     if (!this.ready) throw new WdpError(ErrorCodes.SubsystemNotReady, "files subsystem not ready");
     const baseDir = this.resolveInsideRoot(params.dir ?? ".");
@@ -192,4 +217,5 @@ export function registerFilesSubsystem(
 ): void {
   dispatcher.register<FilesReadParams, FilesReadResult>("files.read", (p) => files.read(p));
   dispatcher.register<FilesListParams, FilesListResult>("files.list", (p) => files.list(p ?? {}));
+  dispatcher.register<FilesWriteParams, FilesWriteResult>("files.write", (p) => files.write(p));
 }
