@@ -57,6 +57,21 @@ export function buildExtension(opts: BuildExtensionOptions = {}) {
     for (const tool of tools) {
       host.registerTool(tool.name, tool.schema, tool.invoke);
     }
+
+    // Per-turn digest injection — doc 02 §2.3, doc 03 §3.4.
+    host.onTurnStart?.(async (ctx) => {
+      try {
+        const digest = await wdp.call<{ text: string; truncated: boolean }>("env.digestSinceLastTurn", {
+          since: ctx.lastTurnTimestamp ? new Date(ctx.lastTurnTimestamp).toISOString() : undefined,
+        });
+        if (digest.text) {
+          ctx.appendSystemMessage(digest.truncated ? `${digest.text}  (digest truncated)` : digest.text);
+        }
+      } catch {
+        // Digest is opportunistic; never block a turn on its failure.
+      }
+    });
+
     return { wdp, close: () => wdp.close() };
   };
 }

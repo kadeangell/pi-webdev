@@ -89,13 +89,17 @@
 <p>Week 3 landed. See <a href="00-progress.html">Progress §0.9</a> for what shipped and what was learned. Smoke test grows to 27 assertions; methods registered: 21 (up from 16). Vite connection is exercised manually rather than in the smoke run — running a full Vite dev server inside the smoke harness would balloon test time without proving anything the unit-level reconciliation doesn't already prove.</p>
 </div>
 
-<h3>Week 4 — Digest + per-turn injection</h3>
+<h3>Week 4 — Digest + per-turn injection <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li>Event coalescing and buffering on the orchestration server</li>
-  <li>Digest formatter — token-bounded, recency-weighted, summary-first</li>
-  <li>Pi extension's <code>onTurnStart</code> hook injects the digest as a system message</li>
-  <li>Tuning pass: run real sessions, measure digest token cost vs. agent quality</li>
+  <li>Event coalescing and buffering — landed at the orchestration server's <code>broadcast()</code> hot path; every event is recorded in a 2000-entry ring buffer that backs the digest.</li>
+  <li>Digest formatter — token-bounded (chars/4 estimate), per-domain summary rows, status icons (✓ ✗), recency-weighted, raw events trimmed to fit. <code>env.digestSinceLastTurn({ since?, budgetTokens? })</code> + <code>env.detectFramework</code> registered.</li>
+  <li>Pi extension's <code>onTurnStart</code> hook calls the digest and appends as a system message when non-empty. Failure is silent — never block a turn.</li>
+  <li>Per-connection cursor management: digest returns a <code>cursor</code> ISO timestamp; subsequent calls without <code>since</code> auto-advance from the last cursor. Cursors are forgotten on disconnect.</li>
 </ul>
+
+<div class="honest">
+<p>Week 4 landed. Tuning lives in <a href="00-progress.html">Progress §0.11</a>; the digest format is still subject to revision once we run real Pi sessions against it. Smoke test now 29 assertions.</p>
+</div>
 
 <h3>Demo at end of phase 2</h3>
 <p>Pi session: "Add a button to the homepage that increments a counter." LLM edits the file, sees the HMR event in the next turn's digest, queries the DOM to verify, fixes any type errors that appeared. Total iteration: 2-3 turns instead of 6-8.</p>

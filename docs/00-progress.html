@@ -178,15 +178,21 @@ node packages/server/dist/bin.js --port 48710 --project-root .
 
 <p><strong>HMR ↔ browser is straightforward when there's no layout.</strong> Lightpanda has no incremental rendering, so a "soft HMR update" doesn't really exist for our browser. The bridge just calls <code>location.reload()</code> on every open session when the adapter receives a non-accepted update. Cheap, correct, no edge cases.</p>
 
-<h2><span class="num">0.10</span>Next iteration</h2>
+<h2><span class="num">0.11</span>Week 4 — digest + per-turn injection</h2>
 
-<p>Week 4 — digest + per-turn injection. The plumbing is in (event coalescing in the watcher, build/HMR fan-out from the Vite adapter); what's missing is the LLM-facing rendering. Plan per <a href="07-roadmap.html">roadmap §7.2 Week 4</a>:</p>
+<p><code>DigestService</code> now subscribes to <code>broadcast()</code> — every event the server fans out also goes into a 2000-entry ring buffer. <code>env.digestSinceLastTurn</code> renders a per-connection digest with three layers: machine-readable summary rows (one per domain), raw events list, and a text rendering with the doc-03-style header ("ENVIRONMENT EVENTS since last turn (Xs):"). Budget is chars/4; default 800 tokens. The Pi extension's <code>onTurnStart</code> hook calls the digest and appends as a system message when non-empty.</p>
 
-<ol>
-  <li>Add an <code>env.digestSinceLastTurn({ since })</code> WDP method that pulls from every subsystem's event stream, ranks by recency-weighted relevance, formats as a token-bounded summary.</li>
-  <li>Wire it into the Pi extension's <code>onTurnStart</code> hook — append as a system message when the digest is non-empty.</li>
-  <li>Tune against real session traces from the bundled fixture.</li>
-</ol>
+<h3>What was learned</h3>
+
+<p><strong>The digest needs to be lazy about cursors.</strong> First sketch made the client send <code>since</code> on every call; in practice clients drift, lose state, and the server is the only one that reliably knows when "last turn" was. The implementation maintains a per-connection cursor server-side that auto-advances when no <code>since</code> is provided. Connections that drop forget their cursor on close.</p>
+
+<p><strong>Char-budget over token-budget is fine for v0.</strong> Real tokenization belongs in the LLM client, not in the orchestration server (different models tokenise differently). The chars/4 heuristic systematically over-counts but never under-counts, so the digest stays inside any plausible token budget the caller wanted.</p>
+
+<p><strong>Summary rows are more valuable than the raw events list.</strong> A naïve "dump every event as JSON" is precisely the failure mode doc 01 §1.3 worried about. The summariser collapses N <code>files.changed</code> into one "files: N changed (top 3 paths)" row, N <code>hmr.update</code> into "hmr: N updates", and only surfaces subsystem state changes when they're <code>crashed</code> or <code>stopped</code>. The LLM gets actionable information first.</p>
+
+<h2><span class="num">0.12</span>Next iteration</h2>
+
+<p>Week 5 — TypeScript LSP. Spawn <code>tsserver</code> as a subprocess; implement <code>types.diagnostics</code> / <code>hoverInfo</code> / <code>definition</code> / <code>references</code>; stream diagnostic deltas into the digest.</p>
 
 <nav class="nav-foot">
   <a href="../index.html">
