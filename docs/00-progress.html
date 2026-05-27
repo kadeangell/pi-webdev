@@ -25,9 +25,9 @@
 
 <h2><span class="num">0.1</span>Where we are</h2>
 
-<p>Phase 1 Week 1 + Week 2 are in. The orchestration server speaks WDP over WebSocket, supervises two subsystems (in-process files, subprocess Lightpanda), and exposes sixteen methods. An LLM (or the human at the <code>pi-webdev</code> CLI) can navigate a real browser to a real URL, click and fill, read DOM, and observe console output — see <a href="09-demo.html#9.8">demo §9.8</a>.</p>
+<p>Phase 1 Weeks 1, 2, and 3 are in. The orchestration server supervises three subsystems (in-process files with chokidar + esbuild dep graph, subprocess Lightpanda, Vite adapter), exposes 21 methods, and broadcasts <code>files.changed</code> / <code>hmr.update</code> / <code>build.completed</code> events for digest construction. An LLM (or the human at the <code>pi-webdev</code> CLI) can navigate a real browser, click and fill, observe console output, query the project's dependency graph, and see file changes stream in as events.</p>
 
-<p>The smoke test (<code>pnpm smoke</code>) now asserts twenty-three things end-to-end:</p>
+<p>The smoke test (<code>pnpm smoke</code>) now asserts twenty-seven things end-to-end:</p>
 
 <ul>
   <li>Handshake completes with a capabilities snapshot.</li>
@@ -164,14 +164,28 @@ node packages/server/dist/bin.js --port 48710 --project-root .
 
 <p>The three uncertainties from §0.5 stand. The Pi extension is still building against a stub host. Heartbeat across process boundaries works for "is the child alive" but not "is the child making progress" — fine for now, will need a real liveness probe (probably a periodic CDP <code>Browser.getVersion</code>) before we run untrusted pages.</p>
 
-<h2><span class="num">0.8</span>Next iteration</h2>
+<h2><span class="num">0.9</span>Week 3 — file watcher + Vite adapter</h2>
 
-<p>The roadmap's week 3 target is the file watcher + Vite adapter — chokidar-backed file watching, a JS/TS dependency graph from esbuild's scanner, and the first dev-server adapter so HMR events surface to the orchestration layer.</p>
+<p>Chokidar now watches the project root and emits coalesced <code>files.changed</code> events to every open WDP connection. A 1000-event ring buffer backs <code>files.changedSince(since)</code> so digest construction can pull deltas without a separate subscription. esbuild's metafile drives <code>files.depGraph(entry)</code> — externals are marked rather than resolved, so the graph stops cleanly at <code>node_modules</code> boundaries. The Vite adapter registers as its own subsystem (<code>vite</code>); it stays in <code>disconnected</code> until <code>build.connect({url})</code> wires it to a real dev server's HMR WebSocket.</p>
+
+<h3>What was learned</h3>
+
+<p><strong>Watcher ignore rules should be narrower than the lister's.</strong> First pass copied <code>files.list</code>'s "skip every dotfile" rule into chokidar and immediately broke the smoke test (the test writes under <code>.smoke-tmp/</code>). On reflection: <code>files.list</code> hides dotfiles to keep listings useful for navigation, but the LLM <em>does</em> want to know when <code>.env</code> changes. Watcher now only skips the heavy directories (<code>node_modules</code>, <code>dist</code>, <code>.git</code>, …). Same intent, different defaults.</p>
+
+<p><strong>esbuild with externals marked is the right dep-graph primitive.</strong> A full bundle is overkill — we don't need the output, just the metafile. Marking everything that isn't a relative path as external means esbuild stops at the <code>node_modules</code> boundary, the metafile still records the edge, and the call returns in milliseconds for typical entry files. <code>files.depGraph</code> on the smoke test's two-file fixture returned 2 nodes / 1 edge in &lt;50ms.</p>
+
+<p><strong>The Vite adapter is honest about not pretending to be Vite.</strong> The plan briefly considered exposing all the Vite plugin-API events as first-class WDP events. The implementation does the smaller thing: subscribe to the HMR <code>WebSocket</code>, translate <code>update</code> / <code>full-reload</code> / <code>error</code> into WDP <code>hmr.update</code> + <code>build.completed</code> / <code>build.failed</code>, and let the rest stay Vite-internal. If Next.js adds an adapter later it emits the same WDP events from its own internal hooks.</p>
+
+<p><strong>HMR ↔ browser is straightforward when there's no layout.</strong> Lightpanda has no incremental rendering, so a "soft HMR update" doesn't really exist for our browser. The bridge just calls <code>location.reload()</code> on every open session when the adapter receives a non-accepted update. Cheap, correct, no edge cases.</p>
+
+<h2><span class="num">0.10</span>Next iteration</h2>
+
+<p>Week 4 — digest + per-turn injection. The plumbing is in (event coalescing in the watcher, build/HMR fan-out from the Vite adapter); what's missing is the LLM-facing rendering. Plan per <a href="07-roadmap.html">roadmap §7.2 Week 4</a>:</p>
 
 <ol>
-  <li>Promote the in-process <code>FilesSubsystem</code>: add chokidar, emit <code>files.changed</code> events, implement <code>files.depGraph({ entry })</code> by walking imports with esbuild's metafile.</li>
-  <li>Vite adapter: detect a running Vite dev server (via its WebSocket HMR channel), translate <code>vite:beforeUpdate</code> / <code>vite:afterUpdate</code> into WDP <code>hmr.update</code> events, and connect Lightpanda to the Vite-served page rather than a static fixture.</li>
-  <li>The first turn-digest sketch (doc 03 §3.4) — even a noisy, ugly version — so we can measure what events the LLM actually wants to see vs. ignore.</li>
+  <li>Add an <code>env.digestSinceLastTurn({ since })</code> WDP method that pulls from every subsystem's event stream, ranks by recency-weighted relevance, formats as a token-bounded summary.</li>
+  <li>Wire it into the Pi extension's <code>onTurnStart</code> hook — append as a system message when the digest is non-empty.</li>
+  <li>Tune against real session traces from the bundled fixture.</li>
 </ol>
 
 <nav class="nav-foot">

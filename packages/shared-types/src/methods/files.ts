@@ -45,3 +45,45 @@ export interface FilesWriteResult {
   bytesWritten: number;
   created: boolean;
 }
+
+export interface FilesChangedSinceParams {
+  /** ISO timestamp. Returns events with `timestamp > since`. */
+  since: string;
+  /** Optional path-prefix filter. */
+  pathPrefix?: string;
+  /** Cap on number of entries. Default 200. */
+  limit?: number;
+}
+export interface FilesChangeEntry {
+  path: string;
+  kind: "add" | "change" | "unlink" | "addDir" | "unlinkDir";
+  timestamp: string;
+}
+export interface FilesChangedSinceResult {
+  changes: FilesChangeEntry[];
+  /** Server-emitted sequence cursor — pass back as `since` next time. */
+  cursor: string;
+  truncated: boolean;
+}
+
+export interface FilesDepGraphParams {
+  /** Entry file (project-relative). */
+  entry: string;
+}
+export interface FilesDepGraphNode {
+  id: string;
+  bytes?: number;
+}
+export interface FilesDepGraphEdge {
+  from: string;
+  to: string;
+  kind?: "import" | "require" | "dynamic";
+}
+export interface FilesDepGraphResult {
+  entry: string;
+  graph: {
+    nodes: FilesDepGraphNode[];
+    edges: FilesDepGraphEdge[];
+  };
+  warnings?: string[];
+}

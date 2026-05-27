@@ -76,14 +76,18 @@
 
 <p>Goal: wire in the file watcher, dev server adapter, and the per-turn digest. This is the phase that delivers the "agent feels the dev loop" magic.</p>
 
-<h3>Week 3 — File watcher + Vite adapter</h3>
+<h3>Week 3 — File watcher + Vite adapter <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li>File watcher using chokidar; project index with ignore rules</li>
-  <li>Dependency graph for TypeScript/JavaScript (esbuild-based scanner)</li>
-  <li>Vite adapter: detect Vite, hook into plugin API for build events and HMR</li>
-  <li>WDP <code>files.*</code> and <code>build.*</code> methods</li>
-  <li>HMR ↔ browser bridge: when Vite emits an HMR update, browser subsystem applies it</li>
+  <li>File watcher using chokidar; project index with ignore rules — landed. Events coalesce within a 100ms window and broadcast as WDP <code>files.changed</code>; ring-buffered 1000 events for <code>files.changedSince</code> digest queries.</li>
+  <li>Dependency graph for TypeScript/JavaScript (esbuild-based scanner) — landed via <code>files.depGraph</code>. Externals are marked rather than resolved, so node_modules show up as edge endpoints without being scanned.</li>
+  <li>Vite adapter — registered as the <code>vite</code> subsystem. Connects via <code>build.connect({url})</code> over the HMR WebSocket (subprotocol <code>vite-hmr</code>); auto-probe optional. Stays in <code>disconnected</code> state when no Vite is running.</li>
+  <li>WDP <code>files.*</code> (read, list, write, changedSince, depGraph) and <code>build.*</code> (status, connect, disconnect) methods — registered.</li>
+  <li>HMR ↔ browser bridge: when the adapter receives a non-accepted update or full-reload, the server triggers <code>location.reload()</code> in every open browser session.</li>
 </ul>
+
+<div class="honest">
+<p>Week 3 landed. See <a href="00-progress.html">Progress §0.9</a> for what shipped and what was learned. Smoke test grows to 27 assertions; methods registered: 21 (up from 16). Vite connection is exercised manually rather than in the smoke run — running a full Vite dev server inside the smoke harness would balloon test time without proving anything the unit-level reconciliation doesn't already prove.</p>
+</div>
 
 <h3>Week 4 — Digest + per-turn injection</h3>
 <ul>

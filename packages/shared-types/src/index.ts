@@ -5,5 +5,6 @@ export * from "./events.js";
 export * from "./methods/files.js";
 export * from "./methods/session.js";
 export * from "./methods/browser.js";
+export * from "./methods/build.js";
 export const PROTOCOL_VERSION = "0.1.0";
 export const SUPPORTED_VERSIONS = ["0.x"] as const;

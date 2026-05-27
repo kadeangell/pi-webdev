@@ -11,7 +11,13 @@ import { registerHandshake } from "./domain/handshake.js";
 import { registerSession } from "./domain/session.js";
 import { FilesSubsystem, registerFilesSubsystem } from "./subsystems/files.js";
 import { BrowserSubsystem, registerBrowserSubsystem } from "./subsystems/browser/index.js";
-import { EventMethods, type ServerCapabilities } from "@pi-webdev/shared-types";
+import { ViteAdapter, registerViteAdapter } from "./subsystems/vite.js";
+import {
+  BuildEventMethods,
+  EventMethods,
+  type FilesChangeEntry,
+  type ServerCapabilities,
+} from "@pi-webdev/shared-types";
 
 export interface ServerOptions {
   /** Bind host. Defaults to 127.0.0.1 — WDP is local-only by design. */
@@ -30,6 +36,12 @@ export interface ServerOptions {
     binary?: string;
     /** Override port (otherwise an OS-assigned ephemeral port is used). */
     port?: number;
+  };
+  /** Vite adapter config. Pass `false` to disable. By default the adapter is
+   *  registered and stays disconnected until `build.connect` is called. */
+  vite?: false | {
+    /** Auto-probe this URL on start(). Defaults to none. */
+    probeUrl?: string;
   };
 }
 
@@ -50,7 +62,11 @@ export class Server {
   private capabilities: ServerCapabilities | null = null;
   private browserVersion: string | null = null;
   private browserSubsystem: BrowserSubsystem | null = null;
-  private readonly opts: Required<Omit<ServerOptions, "browser">> & { browser: ServerOptions["browser"] };
+  private viteAdapter: ViteAdapter | null = null;
+  private readonly opts: Required<Omit<ServerOptions, "browser" | "vite">> & {
+    browser: ServerOptions["browser"];
+    vite: ServerOptions["vite"];
+  };
 
   constructor(opts: ServerOptions = {}) {
     this.opts = {
@@ -61,6 +77,7 @@ export class Server {
       serverName: opts.serverName ?? "@pi-webdev/server",
       serverVersion: opts.serverVersion ?? "0.1.0",
       browser: opts.browser,
+      vite: opts.vite,
     };
     registerHandshake(this.dispatcher, {
       serverName: this.opts.serverName,
@@ -74,6 +91,37 @@ export class Server {
     const files = new FilesSubsystem(this.opts.projectRoot);
     this.subsystems.register(files);
     registerFilesSubsystem(this.dispatcher, files);
+    files.events.on("changed", (entries: FilesChangeEntry[]) => {
+      this.broadcast("files.changed", { entries });
+    });
+
+    if (opts.vite !== false) {
+      const viteOpts: { probeUrl?: string } = {};
+      const cfg = opts.vite;
+      if (cfg && typeof cfg === "object" && cfg.probeUrl) viteOpts.probeUrl = cfg.probeUrl;
+      const vite = new ViteAdapter(viteOpts);
+      this.viteAdapter = vite;
+      this.subsystems.register(vite);
+      registerViteAdapter(this.dispatcher, vite);
+      vite.events.on("hmr", (params: { modules: string[]; accepted: boolean }) => {
+        this.broadcast(BuildEventMethods.HmrUpdate, {
+          timestamp: new Date().toISOString(),
+          ...params,
+        });
+        // Bridge to browser sessions: full reload when the update isn't accepted.
+        if (!params.accepted && this.browserSubsystem) {
+          for (const s of this.browserSubsystem.listSessions().sessions) {
+            void this.browserSubsystem.eval({
+              sessionId: s.sessionId,
+              expression: "location.reload(); null",
+            }).catch(() => undefined);
+          }
+        }
+      });
+      vite.events.on("build", (last: { buildId: string; errors: number; warnings: number; finishedAt: string }) => {
+        this.broadcast(last.errors > 0 ? BuildEventMethods.BuildFailed : BuildEventMethods.BuildCompleted, last);
+      });
+    }
 
     const browserBinary = this.resolveBrowserBinary();
     if (browserBinary) {
