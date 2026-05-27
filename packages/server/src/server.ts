@@ -5,6 +5,8 @@ import { WdpConnection } from "./transport/connection.js";
 import { SubsystemRegistry } from "./subsystems/registry.js";
 import { detectCapabilities } from "./capabilities/detect.js";
 import { registerHandshake } from "./domain/handshake.js";
+import { registerSession } from "./domain/session.js";
+import { FilesSubsystem, registerFilesSubsystem } from "./subsystems/files.js";
 import { EventMethods, type ServerCapabilities } from "@pi-webdev/shared-types";
 
 export interface ServerOptions {
@@ -51,6 +53,13 @@ export class Server {
       serverVersion: this.opts.serverVersion,
       getCapabilities: () => this.getCapabilities(),
     });
+    registerSession(this.dispatcher, {
+      getCapabilities: () => this.getCapabilities(),
+      registry: this.subsystems,
+    });
+    const files = new FilesSubsystem(this.opts.projectRoot);
+    this.subsystems.register(files);
+    registerFilesSubsystem(this.dispatcher, files);
     this.subsystems.on("status", (status) => {
       this.broadcast(EventMethods.SubsystemStatus, status);
     });

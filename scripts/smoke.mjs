@@ -66,6 +66,52 @@ try {
   console.log(`[smoke] unknown method correctly rejected (code ${err.code})`);
 }
 
+// session.subsystems should report the files subsystem ready.
+const subs = await client.call("session.subsystems", {});
+assert.ok(Array.isArray(subs.subsystems), "subsystems array");
+const filesSub = subs.subsystems.find((s) => s.name === "files");
+assert.ok(filesSub, "files subsystem registered");
+assert.equal(filesSub.state, "ready", "files subsystem ready");
+console.log(`[smoke] session.subsystems ok — ${subs.subsystems.map((s) => `${s.name}=${s.state}`).join(", ")}`);
+
+// session.capabilities should now advertise the expanded method list.
+const caps2 = await client.call("session.capabilities", {});
+assert.ok(caps2.capabilities.methods.includes("files.read"), "files.read advertised");
+assert.ok(caps2.capabilities.methods.includes("files.list"), "files.list advertised");
+console.log(`[smoke] session.capabilities ok — ${caps2.capabilities.methods.length} methods`);
+
+// files.list should find the repo root's README without descending into node_modules.
+const listing = await client.call("files.list", { glob: "*.md" });
+assert.ok(listing.paths.includes("README.md"), `README.md not found in listing: ${listing.paths.join(", ")}`);
+assert.ok(!listing.paths.some((p) => p.includes("node_modules")), "node_modules leaked into listing");
+console.log(`[smoke] files.list ok — ${listing.paths.length} entries (e.g. ${listing.paths.slice(0, 3).join(", ")})`);
+
+// files.read should return the README content.
+const readme = await client.call("files.read", { path: "README.md" });
+assert.equal(readme.path, "README.md", "files.read echoes path");
+assert.equal(readme.encoding, "utf8", "files.read default encoding");
+assert.ok(readme.content.startsWith("# pi-webdev"), "README content matches");
+assert.equal(readme.truncated, false, "README should fit under 1 MiB");
+console.log(`[smoke] files.read ok — ${readme.byteLength}B of ${readme.path}`);
+
+// Path traversal must be blocked.
+try {
+  await client.call("files.read", { path: "../etc/passwd" });
+  throw new Error("path traversal should have been rejected");
+} catch (err) {
+  assert.equal(err.code, 10200, "InvalidArgument for traversal");
+  console.log(`[smoke] path traversal correctly rejected (code ${err.code})`);
+}
+
+// Nonexistent file must NotFound.
+try {
+  await client.call("files.read", { path: "does/not/exist.txt" });
+  throw new Error("missing file should have been NotFound");
+} catch (err) {
+  assert.equal(err.code, 10100, "NotFound for missing file");
+  console.log(`[smoke] missing file correctly NotFound (code ${err.code})`);
+}
+
 await client.close();
 await server.stop();
 console.log("[smoke] foundation green ✓");

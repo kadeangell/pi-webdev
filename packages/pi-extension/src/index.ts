@@ -1,8 +1,10 @@
 import { WdpClient } from "./client/index.js";
 import { pingTool, type ToolDefinition } from "./tools/ping.js";
+import { filesListTool, filesReadTool } from "./tools/files.js";
 
 export { WdpClient } from "./client/index.js";
 export { pingTool, type ToolDefinition, type PingArgs } from "./tools/ping.js";
+export { filesReadTool, filesListTool } from "./tools/files.js";
 
 /**
  * Shape of the Pi extension. Wired to Pi's `defineExtension` once the
@@ -47,7 +49,12 @@ export function buildExtension(opts: BuildExtensionOptions = {}) {
       client: opts.clientName ?? "pi-webdev-extension",
       ...(opts.clientVersion !== undefined ? { clientVersion: opts.clientVersion } : {}),
     });
-    for (const tool of [pingTool(wdp)]) {
+    const tools: ToolDefinition<any, any>[] = [
+      pingTool(wdp),
+      filesReadTool(wdp),
+      filesListTool(wdp),
+    ];
+    for (const tool of tools) {
       host.registerTool(tool.name, tool.schema, tool.invoke);
     }
     return { wdp, close: () => wdp.close() };
