@@ -111,14 +111,18 @@
 
 <p>Goal: hook in the LSP and test runner. The agent stops needing to "run npm test" and parse stdout; it gets structured signals.</p>
 
-<h3>Week 5 — TypeScript LSP</h3>
+<h3>Week 5 — TypeScript LSP <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li>Spawn and manage tsserver as a child process</li>
-  <li>Project boundary detection (one tsserver per tsconfig)</li>
-  <li>Implement <code>types.diagnostics</code>, <code>types.hoverInfo</code>, <code>types.definition</code>, <code>types.references</code></li>
-  <li>Diagnostic events stream into the digest with <code>added</code>, <code>removed</code>, <code>modified</code> deltas</li>
-  <li>Add <code>types.diagnostics</code> to the Pi tool surface</li>
+  <li>Spawn and manage tsserver as a child process — landed. <code>typescript/lib/tsserver.js</code> auto-resolved from the project's node_modules or the server's own.</li>
+  <li>Project boundary detection — v0 uses tsserver's inferred-project mode (one process per server instance); per-tsconfig isolation deferred until multi-project scenarios arrive.</li>
+  <li><code>types.diagnostics</code>, <code>types.hoverInfo</code>, <code>types.definition</code>, <code>types.references</code> — registered. tsserver's <code>geterr</code> drives async diagnostics; syntactic / semantic / suggestion deltas are merged per file by source.</li>
+  <li>Diagnostic events stream into the digest — every <code>syntaxDiag</code> / <code>semanticDiag</code> / <code>suggestionDiag</code> from tsserver becomes a <code>types.diagnostics_changed</code> broadcast that the digest records.</li>
+  <li><code>types.diagnostics</code> on the Pi tool surface — the extension can register it directly through the existing tool-import pattern (week 7 polish ships the actual <code>wdp.types*</code> tool wrappers alongside the React introspection tools).</li>
 </ul>
+
+<div class="honest">
+<p>Week 5 landed. Smoke test now 30 assertions; the new one writes a TS file with a deliberate type error and asserts TS2322 comes back through the WDP method. tsserver's JSON-line protocol is more pragmatic than full LSP for our surface — a ~250-line client is enough.</p>
+</div>
 
 <h3>Week 6 — Test and lint</h3>
 <ul>
