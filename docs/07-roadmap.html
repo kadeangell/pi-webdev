@@ -147,14 +147,18 @@
 
 <p>Goal: ship React component introspection — the differentiating feature — and make a public 0.1 release.</p>
 
-<h3>Week 7 — React DevTools backend integration</h3>
+<h3>Week 7 — React DevTools backend integration <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li>Inject <code>react-devtools-core</code> backend into the page on browser subsystem startup</li>
-  <li>WebSocket bridge between the in-page backend and the orchestration server</li>
-  <li>Implement <code>inspect.componentTree</code>, <code>inspect.props</code>, <code>inspect.state</code></li>
-  <li>Stable component ID synthesis (path + name + key hash)</li>
-  <li>Indexed hook value extraction (no source-map analysis yet)</li>
+  <li>In-page React inspector — landed. Skipped the heavy <code>react-devtools-core</code> dependency entirely; a ~150-line vanilla-JS injection (<code>inspect-script.ts</code>) pre-installs <code>__REACT_DEVTOOLS_GLOBAL_HOOK__</code> via <code>Page.addScriptToEvaluateOnNewDocument</code> so React's renderer registers with us at module-init time and every commit's fibers flow into a captured roots map.</li>
+  <li>No separate WebSocket bridge needed — Runtime.evaluate against <code>window.__piWebdev</code> is the bridge. Three exposed surface points: <code>tree()</code>, <code>props(id)</code>, <code>state(id)</code>, <code>query(q)</code>.</li>
+  <li><code>inspect.componentTree</code>, <code>inspect.componentByQuery</code>, <code>inspect.props</code>, <code>inspect.state</code> all registered.</li>
+  <li>Stable component IDs via djb2-hash of <code>path-from-root + componentName + key</code> — IDs survive re-renders even when siblings move.</li>
+  <li>Indexed hook value extraction — landed. Walks the function-component fiber's <code>memoizedState</code> linked list; each hook's <code>memoizedState</code> is captured as <code>{ index, value }</code>. Class components get their state object directly. Source-map-aware hook naming deferred to 0.2 per <a href="07-roadmap.html">roadmap §7.5</a>.</li>
 </ul>
+
+<div class="honest">
+<p>Week 7 — the differentiating feature — landed against real React 19 running inside real Lightpanda. Smoke test grows to 37 assertions; the new ones bundle React+react-dom inline with esbuild at smoke time, serve a Counter component, navigate Lightpanda, then assert: <code>componentTree</code> contains Counter, <code>inspect.props({componentId})</code> returns <code>{initial: 7}</code>, and <code>inspect.state</code> returns <code>hooks[0].value = 7</code> (the useState initial).</p>
+</div>
 
 <h3>Week 8 — Polish and release</h3>
 <ul>

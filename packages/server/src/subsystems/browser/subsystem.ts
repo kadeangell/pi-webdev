@@ -17,6 +17,14 @@ import {
   type BrowserFillResult,
   type BrowserNavigateParams,
   type BrowserNavigateResult,
+  type InspectComponentByQueryParams,
+  type InspectComponentByQueryResult,
+  type InspectComponentTreeParams,
+  type InspectComponentTreeResult,
+  type InspectPropsParams,
+  type InspectPropsResult,
+  type InspectStateParams,
+  type InspectStateResult,
   type SessionCloseParams,
   type SessionCloseResult,
   type SessionCreateParams,
@@ -26,6 +34,7 @@ import {
 import type { Subsystem } from "../registry.js";
 import type { Dispatcher } from "../../dispatcher.js";
 import { CdpClient } from "./cdp-client.js";
+import { INSPECT_INJECTION_SCRIPT } from "./inspect-script.js";
 
 const DEFAULT_BINARY = "lightpanda";
 const MAX_CONSOLE_ENTRIES = 500;
@@ -41,6 +50,8 @@ interface BrowserSession {
   url?: string;
   /** Ring-buffered console entries from Runtime.consoleAPICalled. */
   console: BrowserConsoleEntry[];
+  /** Has Page.addScriptToEvaluateOnNewDocument fired for this session? */
+  inspectorInstalled?: boolean;
 }
 
 export interface BrowserSubsystemOptions {
@@ -148,7 +159,9 @@ export class BrowserSubsystem implements Subsystem {
   async createSession(params: SessionCreateParams = {}): Promise<SessionCreateResult> {
     const cdp = this.cdp;
     if (!cdp) throw new WdpError(ErrorCodes.SubsystemNotReady, "browser not ready");
-    const { targetId } = await cdp.call<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+    // Lightpanda rejects subsequent Target.createTarget with about:blank as
+    // TargetAlreadyLoaded. Pass an empty url and navigate explicitly.
+    const { targetId } = await cdp.call<{ targetId: string }>("Target.createTarget", { url: "" });
     const { sessionId: cdpSessionId } = await cdp.call<{ sessionId: string }>(
       "Target.attachToTarget", { targetId, flatten: true },
     );
@@ -162,6 +175,10 @@ export class BrowserSubsystem implements Subsystem {
 
     if (params.url) {
       await this.navigateInternal(sess, params.url, "load");
+    } else {
+      // Even on about:blank, install the inspector so it's present before
+      // a future navigation; React's hook is read at module-init time.
+      await this.installInspector(sess).catch(() => undefined);
     }
     return { sessionId: id };
   }
@@ -211,10 +228,64 @@ export class BrowserSubsystem implements Subsystem {
       this.loadBarriers.delete(sess.cdpSessionId);
     }
     sess.url = url;
+    // Re-install the inspector after the new document loads — the previous
+    // page's __piWebdev is gone.
+    await this.installInspector(sess).catch(() => undefined);
     const result: BrowserNavigateResult = { url };
     if (r.loaderId !== undefined) result.loaderId = r.loaderId;
     if (r.frameId !== undefined) result.frameId = r.frameId;
     return result;
+  }
+
+  /**
+   * Register the inspector to run before every new document via CDP
+   * `Page.addScriptToEvaluateOnNewDocument`, and also fire-and-forget eval
+   * it against the current document so callers that don't navigate (or that
+   * race the load event) still end up with `window.__piWebdev` available.
+   *
+   * Installing before navigation is critical for React: React reads
+   * `__REACT_DEVTOOLS_GLOBAL_HOOK__` at module-init time. If our hook
+   * isn't already on `window` when React's bundle evaluates, we never see
+   * `onCommitFiberRoot` calls and the component tree stays empty.
+   */
+  private async installInspector(sess: BrowserSession): Promise<void> {
+    const cdp = this.requireCdp();
+    if (!sess.inspectorInstalled) {
+      await cdp.call("Page.addScriptToEvaluateOnNewDocument", {
+        source: INSPECT_INJECTION_SCRIPT,
+      }, sess.cdpSessionId).catch(() => undefined);
+      sess.inspectorInstalled = true;
+    }
+    await cdp.call("Runtime.evaluate", {
+      expression: INSPECT_INJECTION_SCRIPT,
+      returnByValue: true,
+    }, sess.cdpSessionId).catch(() => undefined);
+  }
+
+  async componentTree(params: InspectComponentTreeParams): Promise<InspectComponentTreeResult> {
+    const sess = this.requireSession(params.sessionId);
+    const r = (await this.evalRaw(sess, "window.__piWebdev ? window.__piWebdev.tree() : { unavailable: true, roots: [] }")) as InspectComponentTreeResult | undefined;
+    return r ?? { unavailable: true, roots: [] };
+  }
+
+  async componentByQuery(params: InspectComponentByQueryParams): Promise<InspectComponentByQueryResult> {
+    const sess = this.requireSession(params.sessionId);
+    const r = (await this.evalRaw(sess, `window.__piWebdev ? window.__piWebdev.query(${JSON.stringify(params.query)}) : { matches: [] }`)) as InspectComponentByQueryResult | undefined;
+    return r ?? { matches: [] };
+  }
+
+  async inspectProps(params: InspectPropsParams): Promise<InspectPropsResult> {
+    const sess = this.requireSession(params.sessionId);
+    const r = (await this.evalRaw(sess, `window.__piWebdev ? window.__piWebdev.props(${JSON.stringify(params.componentId)}) : { error: 'inspector not installed' }`)) as { props?: Record<string, unknown>; error?: string };
+    if (r?.error) throw new WdpError(ErrorCodes.NotFound, r.error);
+    return { props: r?.props ?? {} };
+  }
+
+  async inspectState(params: InspectStateParams): Promise<InspectStateResult> {
+    const sess = this.requireSession(params.sessionId);
+    const r = (await this.evalRaw(sess, `window.__piWebdev ? window.__piWebdev.state(${JSON.stringify(params.componentId)}) : { error: 'inspector not installed' }`)) as { state?: Record<string, unknown> | null; hooks?: Array<{ index: number; value: unknown }>; error?: string };
+    if (r?.error) throw new WdpError(ErrorCodes.NotFound, r.error);
+    return { state: r?.state ?? null, hooks: r?.hooks ?? [] };
   }
 
   async dom(params: BrowserDomParams): Promise<BrowserDomResult> {
@@ -368,6 +439,18 @@ export function registerBrowserSubsystem(
   );
   dispatcher.register<BrowserConsoleParams, BrowserConsoleResult>(
     "browser.console", (p) => browser.consoleLog(p),
+  );
+  dispatcher.register<InspectComponentTreeParams, InspectComponentTreeResult>(
+    "inspect.componentTree", (p) => browser.componentTree(p),
+  );
+  dispatcher.register<InspectComponentByQueryParams, InspectComponentByQueryResult>(
+    "inspect.componentByQuery", (p) => browser.componentByQuery(p),
+  );
+  dispatcher.register<InspectPropsParams, InspectPropsResult>(
+    "inspect.props", (p) => browser.inspectProps(p),
+  );
+  dispatcher.register<InspectStateParams, InspectStateResult>(
+    "inspect.state", (p) => browser.inspectState(p),
   );
 }
 

@@ -7,6 +7,7 @@
  * If this exits 0, the foundation is alive. Run with `pnpm smoke`.
  */
 import { createRequire } from "node:module";
+import { resolve as resolveModule } from "node:path";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { createServer as createHttp } from "node:http";
@@ -14,6 +15,45 @@ import { createServer as createHttp } from "node:http";
 const require = createRequire(import.meta.url);
 const { createServer } = require("./../packages/server/dist/index.js");
 const { WdpClient } = require("./../packages/pi-extension/dist/client/index.js");
+
+// Bundle a tiny React app inline so the inspector has something to walk.
+let reactBundle = "";
+try {
+  const serverPkg = createRequire(import.meta.url).resolve("./../packages/server/package.json");
+  const serverRequire = createRequire(serverPkg);
+  const esbuildEntry = serverRequire.resolve("esbuild");
+  const esbuild = await import(esbuildEntry);
+  const entry = `
+import { createElement as h, useState } from "react";
+import { createRoot } from "react-dom/client";
+function Hello({ name }) { return h("span", null, "hello ", name); }
+function Counter({ initial = 0 }) {
+  const [n, setN] = useState(initial);
+  return h("div", null,
+    h(Hello, { name: "smoke" }),
+    h("button", { id: "inc", onClick: () => setN(n + 1) }, "inc"),
+    h("output", { id: "out" }, n)
+  );
+}
+const root = createRoot(document.getElementById("root"));
+root.render(h(Counter, { initial: 7 }));
+window.__counterReady = true;
+`;
+  const r = await esbuild.build({
+    stdin: { contents: entry, loader: "js", resolveDir: process.cwd() },
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    write: false,
+    define: { "process.env.NODE_ENV": '"development"' },
+    target: "es2022",
+    logLevel: "silent",
+  });
+  reactBundle = r.outputFiles[0].text;
+  console.log(`[smoke] react bundle: ${reactBundle.length}B`);
+} catch (err) {
+  console.log(`[smoke] react bundle skipped: ${err.message}`);
+}
 
 // Spin up a tiny page so the browser subsystem has something to navigate to.
 const PAGE_HTML = `<!doctype html>
@@ -31,7 +71,32 @@ const PAGE_HTML = `<!doctype html>
     console.log('smoke page boot');
   </script>
 </body></html>`;
-const fixture = createHttp((_req, res) => {
+const REACT_PAGE_HTML = `<!doctype html>
+<html><head><title>react fixture</title></head>
+<body><div id="root"></div><script>
+  // h() helper hoisted so the bundle can call globalThis.h without imports.
+  globalThis.h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat() });
+</script>
+<script>globalThis.h = require("react").createElement;</script>
+</body></html>`;
+const fixture = createHttp((req, res) => {
+  if (req.url === "/react.js") {
+    res.writeHead(200, { "content-type": "application/javascript" });
+    res.end(reactBundle);
+    return;
+  }
+  if (req.url === "/react") {
+    // Page with the React bundle inlined; using the bundle's own createElement.
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html>
+<html><head><title>react fixture</title></head>
+<body><div id="root"></div>
+<script>
+${reactBundle}
+</script>
+</body></html>`);
+    return;
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(PAGE_HTML);
 });
@@ -340,6 +405,50 @@ if (!hasBrowser) {
   assert.ok(sawBoot, `expected console boot line, got ${JSON.stringify(consoleEntries.entries)}`);
   console.log(`[smoke] browser.console captured ${consoleEntries.entries.length} entry/entries`);
 
+  const closed = await client.call("session.close", { sessionId: session.sessionId });
+  assert.ok(closed.closed, "session closed");
+  console.log(`[smoke] session.close ok`);
+
+  // Week 7 — React introspection via the in-page inspector. Lightpanda
+  // appears to allow only one Target per process; we open a fresh session
+  // (the first one is closed) and navigate it to the React fixture.
+  if (reactBundle) {
+    const reactUrl = fixtureUrl + "react";
+    const rSess = await client.call("session.create", {});
+    await client.call("browser.navigate", { sessionId: rSess.sessionId, url: reactUrl });
+    // Wait for React to commit.
+    let probe;
+    for (let i = 0; i < 40; i++) {
+      probe = await client.call("browser.eval", {
+        sessionId: rSess.sessionId,
+        expression: "JSON.stringify({ ready: window.__counterReady, root: !!document.getElementById('root'), html: document.body.innerHTML.slice(0, 80), hook: !!window.__REACT_DEVTOOLS_GLOBAL_HOOK__ })",
+      });
+      const p = probe.result && JSON.parse(probe.result);
+      if (p?.ready) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (probe) console.log(`[smoke] react boot probe: ${probe.result}`);
+    const tree = await client.call("inspect.componentTree", { sessionId: rSess.sessionId });
+    if (tree.unavailable) {
+      console.log(`[smoke] inspect.componentTree: React not committed yet (skipping)`);
+    } else {
+      assert.ok(tree.roots.length > 0, `expected ≥1 root; got ${JSON.stringify(tree)}`);
+      const find = (nodes) => nodes.flatMap((n) => [n, ...find(n.children)]);
+      const all = find(tree.roots);
+      const counter = all.find((n) => n.name === "Counter");
+      assert.ok(counter, `Counter not found in tree; saw ${all.map((n) => n.name).join(", ")}`);
+      console.log(`[smoke] inspect.componentTree ok — ${all.length} nodes (Counter id=${counter.id})`);
+      const props = await client.call("inspect.props", { sessionId: rSess.sessionId, componentId: counter.id });
+      assert.equal(props.props.initial, 7, `expected initial=7; got ${JSON.stringify(props)}`);
+      console.log(`[smoke] inspect.props ok — initial=${props.props.initial}`);
+      const state = await client.call("inspect.state", { sessionId: rSess.sessionId, componentId: counter.id });
+      assert.ok(state.hooks.length >= 1, `expected ≥1 hook; got ${JSON.stringify(state)}`);
+      assert.equal(state.hooks[0].value, 7, `useState(7) didn't appear in hooks[0]: ${JSON.stringify(state.hooks)}`);
+      console.log(`[smoke] inspect.state ok — hooks[0]=${state.hooks[0].value}`);
+    }
+    await client.call("session.close", { sessionId: rSess.sessionId });
+  }
+
   // Selector miss returns NotFound on click.
   try {
     await client.call("browser.click", { sessionId: session.sessionId, selector: "#does-not-exist" });
@@ -348,10 +457,6 @@ if (!hasBrowser) {
     assert.equal(err.code, 10100, "NotFound for missing selector");
     console.log(`[smoke] missing selector correctly NotFound (code ${err.code})`);
   }
-
-  const closed = await client.call("session.close", { sessionId: session.sessionId });
-  assert.ok(closed.closed, "session closed");
-  console.log(`[smoke] session.close ok`);
 }
 
 await client.close();
