@@ -53,14 +53,18 @@
 <p>Week 1 landed. See <a href="00-progress.html">Progress §0.2</a> for what shipped and §0.3 for what was learned. Measured handshake-then-ping RTT on localhost: ~0.5ms, ~100× under the protocol's read-op target.</p>
 </div>
 
-<h3>Week 2 — Browser subsystem</h3>
+<h3>Week 2 — Browser subsystem <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li>Integrate Lightpanda as a child process</li>
-  <li>Implement <code>browser.navigate</code>, <code>browser.dom</code>, <code>browser.eval</code>, <code>browser.click</code>, <code>browser.fill</code></li>
-  <li>Semantic-tree extraction (no layout; just text, ARIA, visibility, form state)</li>
-  <li>Console and network event streaming</li>
-  <li>End-to-end: LLM can navigate to <code>localhost:3000</code> and read the page</li>
+  <li>Integrate Lightpanda as a child process — subprocess lifecycle owned by <code>SubsystemRegistry</code>; binary auto-resolved from <code>PATH</code> or <code>LIGHTPANDA_BIN</code>; gracefully absent when not installed.</li>
+  <li>Implement <code>browser.navigate</code>, <code>browser.dom</code>, <code>browser.eval</code>, <code>browser.click</code>, <code>browser.fill</code> — landed.</li>
+  <li>Semantic-tree extraction (no layout; just text, ARIA, visibility, form state) — text + html + aria modes; ARIA falls back to text when Lightpanda's a11y tree is empty.</li>
+  <li>Console event streaming — landed (<code>browser.console</code>, ring-buffered 500 entries per session). Network events deferred until they're needed.</li>
+  <li>End-to-end: LLM can navigate to a URL and read the page — proven by the smoke test and <a href="09-demo.html#9.8">demo §9.8</a>.</li>
 </ul>
+
+<div class="honest">
+<p>Week 2 landed against the real Lightpanda binary (1.0.0-nightly). See <a href="00-progress.html">Progress §0.7</a> for what shipped and what we learned about CDP-the-protocol-vs-Lightpanda-the-implementation. Smoke test grows to 23 assertions, including the full browser flow (create session → navigate → eval → click + verify → fill + verify → console replay → close).</p>
+</div>
 
 <h3>Demo at end of phase 1</h3>
 <p>Pi session: "Tell me what's on the homepage of localhost:3000." LLM uses <code>browser.navigate</code> and <code>browser.dom</code>, returns a summary. Total time from <code>pi</code> start to answer: &lt;3s.</p>

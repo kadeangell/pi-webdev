@@ -157,9 +157,61 @@ export function Counter() {
 
 <p>1 MiB cap per call; pass <code>range</code> to walk larger files. Path traversal outside <code>--project-root</code> returns <code>10200 InvalidArgument</code> rather than reading anything.</p>
 
-<h2><span class="num">9.8</span>The smoke test</h2>
+<h2><span class="num">9.8</span>Browser subsystem — Lightpanda end-to-end</h2>
 
-<p><code>pnpm smoke</code> is the live spec — fourteen assertions covering the round-trip, error semantics, subsystem state, and the read/write/list surface. This is what we run before every commit on the foundation.</p>
+<p>Week 2 of the <a href="07-roadmap.html">roadmap</a> is in. The orchestration server now spawns Lightpanda (CDP-over-WebSocket) as a subprocess, attaches via <code>Target.attachToTarget(flatten:true)</code>, and exposes an LLM-shaped browser surface — <code>browser.navigate</code>, <code>browser.dom</code>, <code>browser.eval</code>, <code>browser.click</code>, <code>browser.fill</code>, <code>browser.console</code> — plus the session lifecycle (<code>session.create</code> / <code>session.list</code> / <code>session.close</code>).</p>
+
+<p>One-shot via <code>--auto</code> (ephemeral server per command, fixture page at <code>http://127.0.0.1:9090/</code>):</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --auto browser eval http://127.0.0.1:9090/ "document.title"</span>
+<span class="out">counter demo</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --auto browser dom http://127.0.0.1:9090/</span>
+<span class="out">counter demo 0 inc</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --auto --json caps</span>
+<span class="out">{
+  ...
+  "browser": {
+    "engine": "lightpanda",
+    "version": "1.0.0-nightly.6445+81c1ae73",
+    "features": ["dom", "js", "fetch", "cookies"],
+    "limitations": ["no-layout", "no-webgl", "no-service-workers"]
+  },
+  ...
+}</span></div>
+
+<p>And the more interesting flow — persistent sessions against a long-running daemon, where the LLM (or here, a human at the CLI) can chain actions and verify state:</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev serve --port 48710 &amp;</span>
+<span class="comment">[orchestration server starts, spawns lightpanda subprocess]</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --url ws://127.0.0.1:48710/wdp browser open http://127.0.0.1:9090/</span>
+<span class="out">b1</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --session b1 browser eval "document.getElementById('t').textContent"</span>
+<span class="out">0</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --session b1 browser click "#b"</span>
+<span class="comment">(fire-and-forget; no output)</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --session b1 browser eval "document.getElementById('t').textContent"</span>
+<span class="out">1</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --session b1 browser console</span>
+<span class="out">[info] page ready</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --session b1 browser close</span></div>
+
+<p>Counter goes <code>0 → click → 1</code>. The page's <code>console.log("page ready")</code> is captured at navigation time and replayed by <code>browser.console</code>. Selectors that don't match return <code>10100 NotFound</code> rather than silently noop'ing — important so the LLM gets a structured error rather than fishing out of an empty result.</p>
+
+<div class="honest">
+<p>Lightpanda has no layout, by design. <code>document.body.innerText</code> returns text without rendered spacing — that's why the DOM dump above reads <code>"counter demo 0 inc"</code> instead of nicely-separated lines. For LLM use cases that mostly want text content for understanding, this is fine; for cases that need spatial information (visual regression, click coordinates), Lightpanda is the wrong tool. The plan keeps a Chromium escape hatch as a separate workstream — see <a href="04-browser.html">section 04</a>.</p>
+</div>
+
+<h2><span class="num">9.9</span>The smoke test</h2>
+
+<p><code>pnpm smoke</code> is the live spec — twenty-three assertions now, covering the round-trip, error semantics, subsystem state, the read/write/list surface, and (when Lightpanda is in <code>PATH</code>) the full browser flow: session create → navigate → eval → click + verify → fill + verify → console replay → close. This is what we run before every commit on the foundation.</p>
 
 <div class="term"><span class="prompt">$</span> <span class="cmd">pnpm smoke</span>
 <span class="out">[smoke] server listening at ws://127.0.0.1:37721/wdp
@@ -178,16 +230,26 @@ export function Counter() {
 [smoke] missing file correctly NotFound (code 10100)
 [smoke] files.write round-trip ok — 33B at .smoke-tmp/hello.txt
 [smoke] files.write traversal correctly rejected (code 10200)
+[smoke] browser engine: lightpanda 1.0.0-nightly.6445+81c1ae73
+[smoke] session.create ok — b1
+[smoke] browser.eval title="smoke page"
+[smoke] browser.dom text="smoke page  smoke start go  "
+[smoke] browser.click + verify ok — h1 now "clicked"
+[smoke] browser.fill + verify ok — echo="hello world"
+[smoke] browser.console captured 1 entry/entries
+[smoke] missing selector correctly NotFound (code 10100)
+[smoke] session.close ok
 <span class="ok">[smoke] foundation green ✓</span></span></div>
 
-<h2><span class="num">9.9</span>What this proves</h2>
+<h2><span class="num">9.10</span>What this proves</h2>
 
-<p>Three things, concretely:</p>
+<p>Four things, concretely:</p>
 
 <ol>
   <li><strong>The protocol works end-to-end.</strong> Handshake, capability negotiation, command dispatch, per-connection error semantics, and event broadcasting are all real. The wire format from <a href="03-protocol.html">doc 03</a> survives implementation.</li>
   <li><strong>Capability detection is useful immediately.</strong> Static <code>package.json</code> introspection is enough to give an LLM a complete picture of the project's tech stack in one round trip. No subsystem spawning, no warmup time.</li>
-  <li><strong>Subsystems compose cleanly.</strong> The files subsystem is in-process, registers four lines on the dispatcher, and contributes a <code>files</code> state row to <code>session.subsystems</code> without any registry changes. The next subsystem (likely browser, in-subprocess) will plug into the same shape.</li>
+  <li><strong>Subsystems compose cleanly.</strong> Both in-process (files) and subprocess (browser) flavours register against the same lifecycle hooks; the dispatcher and capabilities snapshot don't care which.</li>
+  <li><strong>Lightpanda's CDP is enough for a working LLM browser surface.</strong> The five core methods (<code>navigate</code> / <code>dom</code> / <code>eval</code> / <code>click</code> / <code>fill</code>) plus console capture all land on top of <code>Target.attachToTarget</code> + <code>Runtime.evaluate</code>. No layout, no GPU, no service workers — and for "let an LLM iterate against the dev server" that turns out to be enough.</li>
 </ol>
 
 <p>What this <em>doesn't</em> prove yet, and what comes next: the browser subsystem, the dev-server adapter, the LSP, the digest. Those are weeks 2–6 of <a href="07-roadmap.html">the roadmap</a>. The foundation that makes them all fit is what's running on this page.</p>

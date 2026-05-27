@@ -23,6 +23,10 @@
 
 <p class="lede">A purpose-built headless browser that skips the rendering pipeline entirely. Boots in well under a second, takes a fraction of the RAM, exposes a CDP-compatible API for migration. The wedge over Playwright + Chromium is iteration speed in the LLM dev loop.</p>
 
+<div class="honest">
+<p>Stock Lightpanda (1.0.0-nightly) is now integrated as the v0 browser subsystem — see <a href="09-demo.html#9.8">demo §9.8</a> and <a href="00-progress.html">Progress §0.7</a>. The "use Lightpanda" branch of §4.1 is what landed; the "fork" and "from scratch" branches stay deferred. The narrow CDP surface (<code>Target.attachToTarget(flatten:true)</code> + <code>Page.navigate</code> + <code>Runtime.evaluate</code>) was enough to back all five WDP browser methods plus console capture.</p>
+</div>
+
 <h2><span class="num">4.1</span>The build-vs-fork-vs-use decision</h2>
 
 <p>Three options, with very different cost profiles:</p>

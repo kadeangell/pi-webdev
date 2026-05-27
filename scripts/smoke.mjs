@@ -9,10 +9,35 @@
 import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
+import { createServer as createHttp } from "node:http";
 
 const require = createRequire(import.meta.url);
 const { createServer } = require("./../packages/server/dist/index.js");
 const { WdpClient } = require("./../packages/pi-extension/dist/client/index.js");
+
+// Spin up a tiny page so the browser subsystem has something to navigate to.
+const PAGE_HTML = `<!doctype html>
+<html><head><title>smoke page</title></head>
+<body>
+  <h1 id="t">smoke</h1>
+  <p>start</p>
+  <button id="btn" onclick="document.getElementById('t').textContent = 'clicked'">go</button>
+  <input id="name" />
+  <output id="echo"></output>
+  <script>
+    document.getElementById('name').addEventListener('input', (e) => {
+      document.getElementById('echo').textContent = 'hello ' + e.target.value;
+    });
+    console.log('smoke page boot');
+  </script>
+</body></html>`;
+const fixture = createHttp((_req, res) => {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(PAGE_HTML);
+});
+await new Promise((r) => fixture.listen(0, "127.0.0.1", r));
+const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`;
+console.log(`[smoke] fixture page at ${fixtureUrl}`);
 
 const server = await createServer({ port: 0, projectRoot: process.cwd() });
 console.log(`[smoke] server listening at ${server.url}`);
@@ -135,6 +160,73 @@ try {
   console.log(`[smoke] files.write traversal correctly rejected (code ${err.code})`);
 }
 
+// Browser subsystem checks — skipped if Lightpanda wasn't detected at startup.
+const hasBrowser = caps.capabilities.methods.includes("browser.navigate");
+if (!hasBrowser) {
+  console.log("[smoke] browser subsystem not registered (lightpanda not in PATH) — skipping browser flow");
+} else {
+  console.log(`[smoke] browser engine: ${caps.capabilities.browser.engine}` +
+    (caps.capabilities.browser.version ? ` ${caps.capabilities.browser.version}` : ""));
+
+  const session = await client.call("session.create", { url: fixtureUrl });
+  assert.ok(session.sessionId, "session created");
+  console.log(`[smoke] session.create ok — ${session.sessionId}`);
+
+  const sessions = await client.call("session.list", {});
+  assert.ok(sessions.sessions.some((s) => s.sessionId === session.sessionId), "session in list");
+
+  // Evaluate document.title.
+  const titleEval = await client.call("browser.eval", {
+    sessionId: session.sessionId,
+    expression: "document.title",
+  });
+  assert.equal(titleEval.result, "smoke page", `title eval: got ${JSON.stringify(titleEval)}`);
+  console.log(`[smoke] browser.eval title="${titleEval.result}"`);
+
+  // Read DOM as text.
+  const dom = await client.call("browser.dom", { sessionId: session.sessionId, mode: "text" });
+  assert.ok(dom.text && dom.text.includes("smoke"), `dom text missing 'smoke': ${dom.text}`);
+  console.log(`[smoke] browser.dom text=${JSON.stringify(dom.text).slice(0, 60)}`);
+
+  // Click the button and verify state mutation.
+  await client.call("browser.click", { sessionId: session.sessionId, selector: "#btn" });
+  const afterClick = await client.call("browser.eval", {
+    sessionId: session.sessionId,
+    expression: "document.getElementById('t').textContent",
+  });
+  assert.equal(afterClick.result, "clicked", `click did not mutate: ${JSON.stringify(afterClick)}`);
+  console.log(`[smoke] browser.click + verify ok — h1 now "${afterClick.result}"`);
+
+  // Fill an input and verify the input event handler ran.
+  await client.call("browser.fill", { sessionId: session.sessionId, selector: "#name", value: "world" });
+  const afterFill = await client.call("browser.eval", {
+    sessionId: session.sessionId,
+    expression: "document.getElementById('echo').textContent",
+  });
+  assert.equal(afterFill.result, "hello world", `fill did not propagate: ${JSON.stringify(afterFill)}`);
+  console.log(`[smoke] browser.fill + verify ok — echo="${afterFill.result}"`);
+
+  // Console capture: page logs "smoke page boot" on load.
+  const consoleEntries = await client.call("browser.console", { sessionId: session.sessionId });
+  const sawBoot = consoleEntries.entries.some((e) => e.text.includes("smoke page boot"));
+  assert.ok(sawBoot, `expected console boot line, got ${JSON.stringify(consoleEntries.entries)}`);
+  console.log(`[smoke] browser.console captured ${consoleEntries.entries.length} entry/entries`);
+
+  // Selector miss returns NotFound on click.
+  try {
+    await client.call("browser.click", { sessionId: session.sessionId, selector: "#does-not-exist" });
+    throw new Error("missing selector click should have failed");
+  } catch (err) {
+    assert.equal(err.code, 10100, "NotFound for missing selector");
+    console.log(`[smoke] missing selector correctly NotFound (code ${err.code})`);
+  }
+
+  const closed = await client.call("session.close", { sessionId: session.sessionId });
+  assert.ok(closed.closed, "session closed");
+  console.log(`[smoke] session.close ok`);
+}
+
 await client.close();
 await server.stop();
+await new Promise((r) => fixture.close(r));
 console.log("[smoke] foundation green ✓");
