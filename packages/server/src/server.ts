@@ -9,12 +9,16 @@ import { SubsystemRegistry } from "./subsystems/registry.js";
 import { detectCapabilities } from "./capabilities/detect.js";
 import { registerHandshake } from "./domain/handshake.js";
 import { registerSession } from "./domain/session.js";
+import { DigestService } from "./domain/digest.js";
 import { FilesSubsystem, registerFilesSubsystem } from "./subsystems/files.js";
 import { BrowserSubsystem, registerBrowserSubsystem } from "./subsystems/browser/index.js";
 import { ViteAdapter, registerViteAdapter } from "./subsystems/vite.js";
 import {
   BuildEventMethods,
   EventMethods,
+  type EnvDetectFrameworkResult,
+  type EnvDigestParams,
+  type EnvDigestResult,
   type FilesChangeEntry,
   type ServerCapabilities,
 } from "@pi-webdev/shared-types";
@@ -56,6 +60,7 @@ export interface ServerOptions {
 export class Server {
   readonly dispatcher = new Dispatcher();
   readonly subsystems = new SubsystemRegistry();
+  readonly digest = new DigestService();
   private http: HttpServer | null = null;
   private wss: WebSocketServer | null = null;
   private connections = new Map<string, WdpConnection>();
@@ -139,6 +144,15 @@ export class Server {
     this.subsystems.on("status", (status) => {
       this.broadcast(EventMethods.SubsystemStatus, status);
     });
+
+    // env.* methods — digest + framework detection re-exposure.
+    this.dispatcher.register<EnvDigestParams, EnvDigestResult>("env.digestSinceLastTurn", (params, ctx) =>
+      this.digest.render(ctx.connectionId, params ?? {}),
+    );
+    this.dispatcher.register<unknown, EnvDetectFrameworkResult>("env.detectFramework", async () => {
+      const caps = await this.getCapabilities();
+      return { framework: caps.framework };
+    });
   }
 
   /** Resolved port after start(). Useful when port: 0 was passed. */
@@ -193,7 +207,9 @@ export class Server {
     await this.subsystems.stopAll();
   }
 
+  /** Push an event to every open connection and record it in the digest ring. */
   broadcast<P>(method: string, params?: P): void {
+    this.digest.record(method, params);
     for (const conn of this.connections.values()) conn.emit(method, params);
   }
 
@@ -228,6 +244,7 @@ export class Server {
 
   private dropConnection(conn: WdpConnection): void {
     this.connections.delete(conn.id);
+    this.digest.forget(conn.id);
   }
 
   private resolveBrowserBinary(): string | null {

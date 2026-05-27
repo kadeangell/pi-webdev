@@ -209,6 +209,24 @@ try {
   console.log(`[smoke] files.depGraph ok — ${r.graph.nodes.length} nodes, ${r.graph.edges.length} edges`);
 }
 
+// Week 4 — env.digestSinceLastTurn captures recent file changes.
+{
+  const since = new Date(Date.now() - 60_000).toISOString();
+  const digest = await client.call("env.digestSinceLastTurn", { since });
+  assert.ok(Array.isArray(digest.summary), "digest.summary array");
+  const filesRow = digest.summary.find((r) => r.domain === "files");
+  assert.ok(filesRow, `expected files row in digest summary; got ${JSON.stringify(digest.summary)}`);
+  assert.ok(digest.text.startsWith("ENVIRONMENT EVENTS"), `digest text header missing: ${digest.text.slice(0, 80)}`);
+  console.log(`[smoke] env.digestSinceLastTurn ok — ${digest.summary.length} row(s), ${digest.text.length} chars`);
+}
+
+// Week 4 — env.detectFramework returns the cached capability.
+{
+  const r = await client.call("env.detectFramework", {});
+  assert.ok(r.framework, "framework returned");
+  console.log(`[smoke] env.detectFramework ok — ${r.framework.detected}`);
+}
+
 // Week 3 — build.status disconnected (no Vite running in smoke env).
 {
   const status = await client.call("build.status", {});
