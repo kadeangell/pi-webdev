@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Progress — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 00 · Progress · updated 2026-05-27</span>
+</div>
+
+<h1><span class="roman">Progress</span></h1>
+
+<p class="lede">A living log of what's been built against the plan, what was learned along the way, and where the plan has shifted as a result. The other docs are the destination; this one is the trail.</p>
+
+<h2><span class="num">0.1</span>Where we are</h2>
+
+<p>Phase 1, Week 1 is in — foundation skeleton plus the first real subsystem. A Node process boots the orchestration server, a client speaks WDP over WebSocket, handshakes via <code>$/initialize</code>, queries capabilities, lists project files, reads files, inspects subsystem state, and round-trips <code>$/ping</code>.</p>
+
+<p>The smoke test (<code>pnpm smoke</code>) now asserts fourteen things end-to-end:</p>
+
+<ul>
+  <li>Handshake completes with a capabilities snapshot.</li>
+  <li><code>$/ping</code> echo round-trips; bare <code>$/ping</code> also works.</li>
+  <li>Double <code>$/initialize</code> on one connection is rejected (<code>-32003 AlreadyInitialized</code>).</li>
+  <li>Unknown methods return <code>-32601 MethodNotFound</code>.</li>
+  <li><code>session.subsystems</code> reports the files subsystem in <code>ready</code> state.</li>
+  <li><code>session.capabilities</code> re-exposes the handshake snapshot with the live method list.</li>
+  <li><code>files.list</code> walks the project, skipping <code>node_modules</code> / <code>.git</code> / <code>dist</code> / etc., and filters by glob.</li>
+  <li><code>files.read</code> returns utf8 content with byte length and truncation flag.</li>
+  <li>Path traversal outside the project root is rejected for both <code>files.read</code> and <code>files.write</code> (<code>10200 InvalidArgument</code>).</li>
+  <li>Reading a nonexistent file returns <code>10100 NotFound</code>.</li>
+  <li><code>files.write</code> + <code>files.read</code> round-trips a scratch file (with <code>createDirs</code>).</li>
+  <li>Calls before handshake return <code>-32001 HandshakeRequired</code> (covered by dispatcher tests, not asserted at the wire yet).</li>
+</ul>
+
+<p>And there's now a captured walkthrough in <a href="09-demo.html">section 09</a> showing the new <code>pi-webdev</code> CLI running against a fixture React project, with the orchestration server correctly detecting React 19 + Vite 7 + Vitest 3 + TypeScript 5 from one <code>package.json</code> read.</p>
+
+<p>Measured RTT on a localhost connection: <strong>~0.5ms per ping</strong>. That's ~100× under the sub-50ms target in <a href="01-architecture.html">section 01</a>, which means the transport is nowhere near being the bottleneck. The bottleneck will be subsystems — and the in-process files subsystem confirms this: it adds <code>files.read</code> latency that's bounded by Node's <code>fs.readFile</code> rather than the protocol.</p>
+
+<h2><span class="num">0.2</span>What's built</h2>
+
+<p>The repo now contains a pnpm workspace with three packages, matching the layout sketched in <a href="07-roadmap.html">section 07 Week 1</a>:</p>
+
+<table>
+  <thead>
+    <tr><th>Package</th><th>What's in it</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>@pi-webdev/shared-types</code></td>
+      <td>WDP wire types (<code>WdpCommand</code>, <code>WdpResponse</code>, <code>WdpEvent</code>), capability shapes, error codes (<code>WdpError</code>), event method constants. Source of truth for the protocol.</td>
+    </tr>
+    <tr>
+      <td><code>@pi-webdev/server</code></td>
+      <td>HTTP/WebSocket transport, dispatcher with pre-initialize allow-list, subsystem registry (lifecycle + heartbeat), static capability detection, in-process files subsystem (read + list with glob, path-traversal guard, ignore list), <code>$/initialize</code>, <code>$/ping</code>, <code>session.capabilities</code>, <code>session.subsystems</code>, <code>files.read</code>, <code>files.list</code> handlers, <code>pi-webdev-server</code> CLI entrypoint.</td>
+    </tr>
+    <tr>
+      <td><code>@pi-webdev/coding-agent</code></td>
+      <td>Thin <code>WdpClient</code> (uses Node 22's built-in <code>WebSocket</code>), a Pi-extension stub (no hard Pi dependency yet), and the <code>wdp.ping</code> / <code>wdp.filesRead</code> / <code>wdp.filesList</code> tools wired to the corresponding WDP methods.</td>
+    </tr>
+    <tr>
+      <td><code>@pi-webdev/cli</code></td>
+      <td><code>pi-webdev</code> binary. <code>--auto</code> boots an ephemeral in-process server; otherwise connects to <code>--url</code>. Subcommands: <code>ping</code>, <code>caps</code>, <code>subsystems</code>, <code>methods</code>, <code>files list|read|write</code>, <code>serve</code>. <code>--json</code> for machine-readable output. Used to capture the demo walkthrough in <a href="09-demo.html">section 09</a>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>How to run it</h3>
+
+<pre><code>pnpm install
+pnpm -r run build
+pnpm smoke               # end-to-end round-trip
+# or, manual:
+node packages/server/dist/bin.js --port 48710 --project-root .
+</code></pre>
+
+<h2><span class="num">0.3</span>What was learned</h2>
+
+<p>Things that shifted, sharpened, or surprised across the first two iterations:</p>
+
+<p><strong>An in-process subsystem is a useful subsystem.</strong> The plan in <a href="05-subsystems.html">section 05</a> implicitly treats subsystems as subprocesses (Lightpanda, tsserver, Vite). But for a file watcher / file reader, there's no upside to a subprocess — the orchestration server is already Node, and Node's <code>fs.readFile</code> is fast and well-behaved. The subsystem registry shape works for both flavors; the contract is just <code>start / stop / heartbeat</code>. We'll keep the door open for promoting <code>FilesSubsystem</code> to a subprocess if memory or CPU pressure ever justifies it.</p>
+
+<p><strong>Path-traversal guarding belongs in the subsystem, not the dispatcher.</strong> First instinct was to centralise sandboxing in the transport layer. Wrong layer — only the subsystem knows what its "valid" addressable surface looks like. <code>files.*</code> guards against escaping the project root; a future <code>browser.*</code> will need entirely different argument validation. Each subsystem owns its security boundary; the dispatcher just routes.</p>
+
+<p><strong>Glob matching is the smallest meaningful filter.</strong> Doc 03 §3.2 sketches <code>files.list({ glob })</code>. A 30-line glob→regex translation (supports <code>**</code>, <code>*</code>, <code>?</code>, <code>[...]</code>) is plenty for v0; chokidar in week 3 will bring proper matching for free.</p>
+
+
+<p><strong>Static-only capability detection is the right starting point.</strong> The plan in <a href="03-protocol.html">section 03 §3.5</a> mixes static facts (framework, version) with subsystem-live facts (is the dev server up, what's its HMR state). The skeleton draws a clean line: <code>detectCapabilities()</code> only inspects <code>package.json</code> and notable files. Live readiness flows out separately as <code>$/subsystem.status</code> events. This keeps the handshake response stable and cheap — the LLM gets a complete capability snapshot in one round trip, and live state changes are deltas.</p>
+
+<p><strong>The <code>initialized</code> flag wants to live on the connection, not in the dispatcher.</strong> First pass tried to maintain an "initialized connections" set on the server and mutate the dispatcher context from outside; it was a tangle. Final shape: each <code>WdpConnection</code> owns a boolean; the dispatcher gets a <code>markInitialized</code> callback in its <code>HandlerContext</code>; the handshake handler calls it. Easier to reason about, easier to test, and the <code>HandlerContext</code> becomes the obvious place for per-connection capabilities like <code>emit</code> too.</p>
+
+<p><strong>Node 22's built-in <code>WebSocket</code> lets the client package stay dependency-free.</strong> The server still needs <code>ws</code> for the server-side socket (no stdlib equivalent), but the extension package has no runtime dependencies beyond <code>@pi-webdev/shared-types</code>. That keeps the install surface small for users who only want the Pi extension.</p>
+
+<p><strong>The pre-initialize allow-list is worth being explicit about.</strong> <code>$/initialize</code> obviously needs to be callable before initialize. <code>$/ping</code> needs it too — liveness probes shouldn't have to handshake first. Everything else requires the handshake to have completed. The dispatcher's <code>preInitMethods</code> set names this rule instead of leaving it implicit.</p>
+
+<div class="honest">
+<p>Roughly 1,500 LOC of TypeScript across the three packages got the foundation green plus the first subsystem. The smoke test is the spec for now — when we add real subsystems, that file is what proves nothing regressed at the transport/handshake layer.</p>
+</div>
+
+<h2><span class="num">0.4</span>Where the plan shifted</h2>
+
+<p>Small revisions back into the planning docs as we went:</p>
+
+<ul>
+  <li><strong>Error code allocation.</strong> The plan said "-32xxx protocol / 1xxx tool / 2xxx transient" in <a href="03-protocol.html">section 03 §3.7</a>. Implemented the actual codes in <code>shared-types/errors.ts</code> — <code>HandshakeRequired</code>, <code>UnsupportedProtocolVersion</code>, <code>AlreadyInitialized</code> live in <code>-32001..-32003</code>; <code>NotFound</code> got <code>10100</code>, <code>InvalidArgument</code> got <code>10200</code>, leaving room for category-by-thousand expansion under the tool-error umbrella.</li>
+  <li><strong>Subsystem registry contract.</strong> Doc 05 sketches "spawn, heartbeat, restart" supervision. The skeleton implements all three but ships with restart disabled — we'll tune restart policy (max attempts, backoff curve, crash-loop detection) once a real subprocess subsystem is actually crashing. Premature tuning would be guesswork.</li>
+  <li><strong>Capability advertisement is method-aware.</strong> Beyond what doc 03 §3.5 shows, the <code>capabilities.methods</code> array now lists exactly which WDP methods the server will dispatch this session. Pi's extension can use it directly to decide which tools to register — no separate "is this method available" probe needed.</li>
+  <li><strong>Subsystems can be in-process.</strong> Doc 05 implies subsystems are subprocesses. The files subsystem is in-process and the registry contract didn't need any changes to support it. We'll add a subprocess-specific sub-interface only when the first real subprocess subsystem (browser, LSP) actually needs one.</li>
+  <li><strong>Sandboxing is per-subsystem.</strong> The dispatcher doesn't validate file paths — only the files subsystem does. Each subsystem will own its own security boundary; the dispatcher just routes.</li>
+</ul>
+
+<h2><span class="num">0.5</span>Open from week 1</h2>
+
+<div class="uncertain">
+<p>The dispatcher only enforces "must be initialized" for non-handshake methods, but doesn't enforce anything about which client a method is exposed to. Once we have multi-client sessions (Pi + a TUI dashboard, say), per-client subscriptions and per-client tool surfaces will need a model. Not blocking yet, but worth thinking about before subsystems land.</p>
+</div>
+
+<div class="uncertain">
+<p>The Pi extension currently builds against a stub <code>PiExtensionHost</code> interface instead of importing <code>defineExtension</code> from Pi itself. We need to pin a Pi version and replace the stub. Doing this before reading Pi's source carefully (per roadmap §7.8 step 1) would be premature.</p>
+</div>
+
+<div class="uncertain">
+<p>Heartbeat runs in-process and trusts the subsystem to return <code>true</code>. Once subsystems are subprocesses, heartbeat needs to span process boundaries — probably a periodic <code>$/ping</code> on the internal stdio channel, with crash detection on EPIPE. That's a week-2 problem.</p>
+</div>
+
+<h2><span class="num">0.6</span>Next iteration</h2>
+
+<p>The roadmap's week 2 target is the browser subsystem (Lightpanda integration, <code>browser.navigate</code> / <code>browser.dom</code> / <code>browser.eval</code>). Before touching Lightpanda we need to:</p>
+
+<ol>
+  <li>Build a subprocess-flavored subsystem to actually stress the registry's heartbeat + crash + restart paths. The files subsystem proved the in-process flow; the next subsystem needs to prove the subprocess flow. A trivial <code>EchoSubprocess</code> (Node child that responds to <code>$/ping</code> over stdio) is enough.</li>
+  <li>Pin the internal subsystem protocol (subsystem ↔ orchestration server) — almost certainly JSON-RPC over stdio, with a smaller method surface than WDP. Doc 05 implies it; we'll write it down.</li>
+  <li>Try Lightpanda against a real React project (roadmap §7.8 step 2). The go/no-go from <a href="04-browser.html">doc 04</a> should run on a real artifact, not on hope.</li>
+</ol>
+
+<p>After that, Phase 0's three-browser-tools spike from roadmap §7.0 is essentially free — once the browser subsystem boundary is real, <code>browser.navigate</code> / <code>browser.dom</code> / <code>browser.eval</code> are thin dispatcher entries.</p>
+
+<nav class="nav-foot">
+  <a href="../index.html">
+    <span class="label">Up</span>
+    <span class="title">Plan overview</span>
+  </a>
+  <a href="01-architecture.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Architecture</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 00 · progress</span>
+<span>v0.1 · live</span>
+</div>
+
+</main>
+</body>
+</html>

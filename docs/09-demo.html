@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 09 · Demo · captured 2026-05-27</span>
+</div>
+
+<h1><span class="roman">Demo</span></h1>
+
+<p class="lede">A live walkthrough of the foundation against a fixture React project — <code>examples/counter-app/</code>. Every transcript on this page is real output captured from the <code>pi-webdev</code> CLI on this branch. Nothing here is staged or mocked.</p>
+
+<h2><span class="num">9.1</span>The fixture</h2>
+
+<p>A tiny Vite + React 19 + TypeScript + Vitest project. It exists for one reason: to give the orchestration server something to detect.</p>
+
+<pre><code>examples/counter-app/
+├── package.json         react 19, vite 7, vitest 3, typescript 5
+├── tsconfig.json
+├── index.html
+└── src/
+    ├── main.tsx
+    └── Counter.tsx      a one-button counter component</code></pre>
+
+<h2><span class="num">9.2</span>The CLI</h2>
+
+<p>A new <code>@pi-webdev/cli</code> package ships a <code>pi-webdev</code> binary. It speaks WDP to a running orchestration server, or — with <code>--auto</code> — boots one in-process for the duration of a single command. Useful for scripts, demos, and one-shot queries.</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --help</span>
+<span class="out">pi-webdev — orchestration server client + helpers
+
+USAGE
+  pi-webdev [--url URL | --auto] [--project-root DIR] [--json] &lt;command&gt; [args]
+
+COMMANDS
+  ping [--echo TEXT]              Round-trip a $/ping. Reports RTT.
+  caps                            Print server capability snapshot.
+  subsystems                      List subsystems and states.
+  methods                         List all registered WDP methods.
+  files list [GLOB] [--limit N]   List project files (default skip rules apply).
+  files read PATH                 Read a file and print its content.
+  files write PATH                Write a file. Content read from stdin.
+  serve                           Run the orchestration server (no client).
+
+FLAGS
+  --url URL                       WDP endpoint. Default ws://127.0.0.1:48710/wdp.
+  --auto                          Boot an ephemeral server in-process and connect.
+  --project-root DIR              Project root for --auto. Default cwd.
+  --json                          Print machine-readable JSON instead of formatted text.</span></div>
+
+<h2><span class="num">9.3</span>Round-trip</h2>
+
+<p>The bottom of the stack — <code>$/ping</code> through the full transport. Boot the server, handshake, ping, tear down, all under a second.</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --auto --project-root examples/counter-app ping --echo demo-ready</span>
+<span class="ok">pong rtt=0.76ms echo="demo-ready"</span></div>
+
+<p>Sub-millisecond round-trip on localhost — handshake amortised, transport overhead is essentially nothing. The eventual ceiling is the LLM's tool-call latency, not WDP.</p>
+
+<h2><span class="num">9.4</span>What the server detects</h2>
+
+<p>The orchestration server reads <code>examples/counter-app/package.json</code> at startup and emits a capability snapshot. <code>session.capabilities</code> re-exposes it any time.</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --auto --project-root examples/counter-app --json caps</span>
+<span class="out">{
+  "methods": [
+    "$/initialize",
+    "$/ping",
+    "files.list",
+    "files.read",
+    "files.write",
+    "session.capabilities",
+    "session.subsystems"
+  ],
+  "browser": {
+    "engine": "none",
+    "features": [],
+    "limitations": ["browser-subsystem-not-implemented"]
+  },
+  "lsp": {
+    "available": ["typescript"],
+    "not_detected": ["eslint"],
+    "typescript": { "version": "^5.6.0" }
+  },
+  "devServer": {
+    "type": "vite",
+    "version": "^7.1.0",
+    "hmr": true
+  },
+  "framework": {
+    "detected": "react",
+    "version": "^19.1.0",
+    "introspection": "react-devtools-backend"
+  },
+  "test": {
+    "runner": "vitest",
+    "version": "^3.0.0"
+  },
+  "projectRoot": "examples/counter-app"
+}</span></div>
+
+<p>What the LLM gets from one handshake call: it's a React 19 project, dev server is Vite 7 with HMR, type-checker is TypeScript 5.6, tests run on Vitest 3, and seven WDP methods are dispatchable this session. No probing required.</p>
+
+<p>The <code>browser.engine: "none"</code> is honest — we haven't built the browser subsystem yet, and the capability surface says so explicitly rather than pretending. That's a deliberate choice from <a href="03-protocol.html">doc 03 §3.5</a>: capability negotiation should advertise the truth.</p>
+
+<h2><span class="num">9.5</span>Subsystems</h2>
+
+<p>Live state of every subsystem the orchestration server is supervising. Today there's one — files — running in-process.</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --auto --project-root examples/counter-app subsystems</span>
+<span class="out">  files            ready</span></div>
+
+<p>When the browser subsystem lands in week 2 of <a href="07-roadmap.html">the roadmap</a>, it'll appear here too, in <code>starting → ready</code> → maybe <code>crashed → ready</code> if Lightpanda is having a moment. State transitions also broadcast as <code>$/subsystem.status</code> events so the digest can surface them at turn boundaries.</p>
+
+<h2><span class="num">9.6</span>Listing files</h2>
+
+<p>Default ignore list (matching common Node project skip rules) keeps the listing pertinent — no <code>node_modules</code>, no <code>.git</code>, no <code>dist</code>.</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --auto --project-root examples/counter-app files list</span>
+<span class="out">  index.html
+  package.json
+  src/Counter.tsx
+  src/main.tsx
+  tsconfig.json</span>
+
+<span class="prompt">$</span> <span class="cmd">pi-webdev --auto --project-root examples/counter-app files list "**/*.tsx"</span>
+<span class="out">  src/Counter.tsx
+  src/main.tsx</span></div>
+
+<h2><span class="num">9.7</span>Reading a file</h2>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pi-webdev --auto --project-root examples/counter-app files read src/Counter.tsx</span>
+<span class="out">import { useState } from "react";
+
+export function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    &lt;button onClick={() =&gt; setCount((c) =&gt; c + 1)}&gt;
+      count: {count}
+    &lt;/button&gt;
+  );
+}
+<span class="comment">[209 bytes]</span></span></div>
+
+<p>1 MiB cap per call; pass <code>range</code> to walk larger files. Path traversal outside <code>--project-root</code> returns <code>10200 InvalidArgument</code> rather than reading anything.</p>
+
+<h2><span class="num">9.8</span>The smoke test</h2>
+
+<p><code>pnpm smoke</code> is the live spec — fourteen assertions covering the round-trip, error semantics, subsystem state, and the read/write/list surface. This is what we run before every commit on the foundation.</p>
+
+<div class="term"><span class="prompt">$</span> <span class="cmd">pnpm smoke</span>
+<span class="out">[smoke] server listening at ws://127.0.0.1:37721/wdp
+[smoke] handshake ok — server @pi-webdev/server@0.1.0,
+        methods: $/initialize, $/ping, files.list, files.read,
+        files.write, session.capabilities, session.subsystems
+[smoke] $/ping echo="hello-foundation" rtt=0.64ms
+[smoke] $/ping (no echo) ok
+[smoke] double-handshake correctly rejected (code -32003)
+[smoke] unknown method correctly rejected (code -32601)
+[smoke] session.subsystems ok — files=ready
+[smoke] session.capabilities ok — 7 methods
+[smoke] files.list ok — 1 entries (e.g. README.md)
+[smoke] files.read ok — 4145B of README.md
+[smoke] path traversal correctly rejected (code 10200)
+[smoke] missing file correctly NotFound (code 10100)
+[smoke] files.write round-trip ok — 33B at .smoke-tmp/hello.txt
+[smoke] files.write traversal correctly rejected (code 10200)
+<span class="ok">[smoke] foundation green ✓</span></span></div>
+
+<h2><span class="num">9.9</span>What this proves</h2>
+
+<p>Three things, concretely:</p>
+
+<ol>
+  <li><strong>The protocol works end-to-end.</strong> Handshake, capability negotiation, command dispatch, per-connection error semantics, and event broadcasting are all real. The wire format from <a href="03-protocol.html">doc 03</a> survives implementation.</li>
+  <li><strong>Capability detection is useful immediately.</strong> Static <code>package.json</code> introspection is enough to give an LLM a complete picture of the project's tech stack in one round trip. No subsystem spawning, no warmup time.</li>
+  <li><strong>Subsystems compose cleanly.</strong> The files subsystem is in-process, registers four lines on the dispatcher, and contributes a <code>files</code> state row to <code>session.subsystems</code> without any registry changes. The next subsystem (likely browser, in-subprocess) will plug into the same shape.</li>
+</ol>
+
+<p>What this <em>doesn't</em> prove yet, and what comes next: the browser subsystem, the dev-server adapter, the LSP, the digest. Those are weeks 2–6 of <a href="07-roadmap.html">the roadmap</a>. The foundation that makes them all fit is what's running on this page.</p>
+
+<nav class="nav-foot">
+  <a href="08-risks.html">
+    <span class="label">← Previous</span>
+    <span class="title">Risks and open questions</span>
+  </a>
+  <a href="00-progress.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Progress</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 09 · demo</span>
+<span>v0.1 · captured</span>
+</div>
+
+</main>
+</body>
+</html>

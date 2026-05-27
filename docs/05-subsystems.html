@@ -23,6 +23,10 @@
 
 <p class="lede">Four supporting subsystems beyond the browser: file watcher, TypeScript LSP, dev server adapter, and test/lint runner. Each is replaceable, each speaks a narrow internal protocol to the orchestration server, each contributes to the digest the LLM sees at each turn.</p>
 
+<div class="honest">
+<p>An early version of the files subsystem is now live in <code>packages/server</code> — see <a href="00-progress.html">Progress §0.2</a>. It implements <code>files.read</code> and <code>files.list</code> (with glob) in-process; the dep graph, write surface, and chokidar-backed watcher arrive in week 3 per <a href="07-roadmap.html">roadmap §7.2</a>. Key finding: subsystems don't have to be subprocesses — the registry contract is the same either way.</p>
+</div>
+
 <h2><span class="num">5.1</span>File watcher</h2>
 
 <p>Responsibility: maintain a real-time view of the project's file state and a dependency graph that's queryable without a full re-scan.</p>

@@ -222,6 +222,10 @@ ENVIRONMENT EVENTS since last turn (2.3s):
 
 <p>Tools that depend on un-detected capabilities don't get registered with Pi. The LLM never sees <code>inspect.componentTree</code> in a Vue project that uses React DevTools terminology.</p>
 
+<div class="honest">
+<p>The handshake and error-code sections below are now implemented — see <a href="00-progress.html">Progress §0.4</a>. The shape held; the only adjustment was nailing down specific codes (<code>-32001 HandshakeRequired</code>, <code>-32002 UnsupportedProtocolVersion</code>, <code>-32003 AlreadyInitialized</code>) in the JSON-RPC server-defined range.</p>
+</div>
+
 <h2><span class="num">3.6</span>Versioning</h2>
 
 <p>The protocol is versioned at the connection handshake. Clients send their supported version range; the server picks the highest mutually-supported version.</p>

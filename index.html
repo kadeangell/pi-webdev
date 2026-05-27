@@ -14,14 +14,14 @@
 
 <div class="eyebrow">
   <span class="dot"></span>
-  <span>Working draft · v0.1 · written with Claude</span>
+  <span>Working draft · v0.1 · foundation in · written with Claude</span>
 </div>
 
 <h1>Pi <span class="roman">WebDev</span></h1>
 
 <p class="lede">An orchestration system for LLM-driven web development. A custom browser, a unified protocol that goes beyond CDP, and tight integration with the Pi coding agent — so an LLM can iterate on a web project at the speed of the dev server, not the speed of Playwright.</p>
 
-<p>This is a comprehensive plan, not a specification. Most pieces are sketched well enough to start building. A few are deliberately left open — flagged inline so they can be sharpened with real implementation feedback.</p>
+<p>This is a comprehensive plan plus a live foundation. Phase 1 Week 1 of the <a href="docs/07-roadmap.html">roadmap</a> is in — the orchestration server speaks WDP over WebSocket, the Pi extension client handshakes and round-trips. See <a href="docs/00-progress.html">Progress</a> for what's built, what was learned, and what the next iteration tackles.</p>
 
 <p>The core thesis is that LLM-driven web development is currently bottlenecked by browser tooling that was designed for human QA engineers, not autonomous agents. Playwright + headless Chrome eats 2-5 seconds per iteration. Tight LLM loops need sub-100ms. A purpose-built browser plus a richer protocol that surfaces build state, type errors, dev-server events, and framework-level introspection — wrapped behind a Pi extension — could change what an agent can do in a working session.</p>
 
@@ -112,6 +112,13 @@
 
 <ol class="toc">
   <li>
+    <span class="num">00</span>
+    <div>
+      <p class="item-title"><a href="docs/00-progress.html">Progress</a></p>
+      <p class="item-desc">Living log of what's built, what was learned, where the plan shifted. Start here if you want the trail rather than the destination.</p>
+    </div>
+  </li>
+  <li>
     <span class="num">01</span>
     <div>
       <p class="item-title"><a href="docs/01-architecture.html">Architecture</a></p>
@@ -165,6 +172,13 @@
     <div>
       <p class="item-title"><a href="docs/08-risks.html">Risks and open questions</a></p>
       <p class="item-desc">Where this plan is fragile and what to validate before committing engineering.</p>
+    </div>
+  </li>
+  <li>
+    <span class="num">09</span>
+    <div>
+      <p class="item-title"><a href="docs/09-demo.html">Demo</a></p>
+      <p class="item-desc">Captured walkthrough of the foundation against a fixture React project. Real CLI output, no mocks.</p>
     </div>
   </li>
 </ol>

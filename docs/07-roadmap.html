@@ -40,14 +40,18 @@
 
 <p>Goal: ship a working orchestration server with the browser subsystem and a minimal Pi extension, end-to-end.</p>
 
-<h3>Week 1 — Skeleton</h3>
+<h3>Week 1 — Skeleton <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
   <li>Repo setup. Monorepo (pnpm workspaces): <code>packages/server</code>, <code>packages/pi-extension</code>, <code>packages/shared-types</code></li>
   <li>WDP wire format and basic transport (WebSocket, JSON framing)</li>
   <li>Capability negotiation handshake</li>
-  <li>Subsystem supervision skeleton (spawn, heartbeat, restart)</li>
+  <li>Subsystem supervision skeleton (spawn, heartbeat, restart) — lifecycle + heartbeat in; restart-with-backoff deferred until we have a real subsystem to tune against</li>
   <li>Pi extension registers a single tool (<code>$/ping</code>) that round-trips through WDP</li>
 </ul>
+
+<div class="honest">
+<p>Week 1 landed. See <a href="00-progress.html">Progress §0.2</a> for what shipped and §0.3 for what was learned. Measured handshake-then-ping RTT on localhost: ~0.5ms, ~100× under the protocol's read-op target.</p>
+</div>
 
 <h3>Week 2 — Browser subsystem</h3>
 <ul>
