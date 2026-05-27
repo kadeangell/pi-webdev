@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subsystems — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 05 · Subsystems</span>
+</div>
+
+<h1><span class="roman">Subsystems</span></h1>
+
+<p class="lede">Four supporting subsystems beyond the browser: file watcher, TypeScript LSP, dev server adapter, and test/lint runner. Each is replaceable, each speaks a narrow internal protocol to the orchestration server, each contributes to the digest the LLM sees at each turn.</p>
+
+<h2><span class="num">5.1</span>File watcher</h2>
+
+<p>Responsibility: maintain a real-time view of the project's file state and a dependency graph that's queryable without a full re-scan.</p>
+
+<h3>Implementation</h3>
+<p>Use <code>chokidar</code> as the OS-event abstraction. It's the de facto standard, handles platform quirks (macOS FSEvents, Linux inotify, Windows ReadDirectoryChangesW), and integrates cleanly with Node.</p>
+
+<p>Beyond raw FS events, the file watcher maintains:</p>
+
+<ul>
+  <li>A project index: every file, with size, mtime, hash</li>
+  <li>A dependency graph: which files import which, computed from AST</li>
+  <li>An ignore set: <code>node_modules</code>, <code>.git</code>, build outputs, .gitignore-respecting</li>
+  <li>A "what changed since timestamp X" query API for the digest</li>
+</ul>
+
+<h3>Dependency graph</h3>
+<p>This is the bit that's more work than it looks. Languages vary:</p>
+
+<ul>
+  <li>TypeScript / JavaScript — parse imports with a fast esbuild-or-swc-based scanner; resolve via tsconfig paths</li>
+  <li>CSS — <code>@import</code> directives, plus PostCSS / SCSS chains</li>
+  <li>Svelte / Vue — multi-language single-file components need component-aware parsing</li>
+  <li>Static asset references — best-effort regex over JS / CSS string literals</li>
+</ul>
+
+<p>For v0, JS/TS only. Other languages return "dep graph unavailable" from the WDP layer. Project-wide changes that touch CSS or Vue components are still detected; we just don't compute the dependency closure for them.</p>
+
+<div class="uncertain">
+<p>The dependency graph is potentially the most useful thing the file watcher provides to the LLM ("which other files might be affected by this change?"). But it's also the part most likely to be wrong in edge cases — dynamic imports, conditional requires, JSX-driven imports. Worth shipping a clearly-imperfect version early and iterating, rather than waiting for correctness.</p>
+</div>
+
+<h3>WDP surface</h3>
+<pre><code>files.list({ glob? })             // all files matching glob
+files.read({ path, range? })       // file content
+files.write({ path, content })     // writes; triggers dep invalidation
+files.depGraph({ entry })          // dependency closure from entry
+files.changedSince({ timestamp })  // for digest construction</code></pre>
+
+<h2><span class="num">5.2</span>TypeScript LSP</h2>
+
+<p>Responsibility: surface TypeScript diagnostics, hover info, definitions, references. Cache aggressively so each LLM query is sub-10ms.</p>
+
+<h3>Implementation</h3>
+<p>Run <code>tsserver</code> (the TypeScript server) as a child process and speak the LSP protocol to it. Don't reinvent — tsserver is the same engine that powers VSCode's TypeScript support, plus every other TypeScript-aware editor.</p>
+
+<p>Process model:</p>
+
+<ul>
+  <li>One tsserver per tsconfig (most projects have one)</li>
+  <li>Persistent — boots when orchestration server boots, stays warm</li>
+  <li>Project files registered up-front, then incremental on file change</li>
+  <li>Background <code>--watch</code>-style compilation; results stream into the orchestration server</li>
+</ul>
+
+<h3>What's exposed via WDP</h3>
+<pre><code>types.diagnostics({ scope?, since? })
+types.hoverInfo({ file, line, col })
+types.definition({ file, line, col })
+types.references({ file, line, col })
+types.completions({ file, line, col, prefix? })  // future</code></pre>
+
+<p>The high-value one is <code>types.diagnostics</code>, especially with <code>since</code> — "what type errors are new or fixed since the last LLM turn?" This is the single signal the LLM needs to know whether its edit broke or fixed something.</p>
+
+<h3>What's not exposed</h3>
+<p>Code actions, refactorings, rename, organize imports. These are useful but redundant — the LLM can do them itself, and exposing them creates a temptation for the model to invoke "auto-fix" tools instead of understanding the problem.</p>
+
+<div class="honest">
+<p>I'm 70% confident on this design choice. The argument the other way: a "fix import" tool that does the obvious thing in 100ms saves the LLM a turn. Worth measuring whether agent quality drops when these are unavailable.</p>
+</div>
+
+<h2><span class="num">5.3</span>Dev server adapter</h2>
+
+<p>Responsibility: hook into the project's dev server (Vite, Next, Remix, Astro, SvelteKit, Vinxi, Rspack) to observe build state and HMR events.</p>
+
+<h3>Adapter-per-framework</h3>
+<p>Each dev server has its own hooks, plugin API, event surface. We ship adapters that all conform to the same internal interface:</p>
+
+<pre><code>interface DevServerAdapter {
+  detect(projectRoot: string): Promise&lt;boolean&gt;
+  attach(projectRoot: string): Promise&lt;void&gt;
+
+  onBuildStart(handler: (e: BuildStartEvent) => void): void
+  onBuildEnd(handler: (e: BuildEndEvent) => void): void
+  onHmrUpdate(handler: (e: HmrUpdateEvent) => void): void
+  onError(handler: (e: BuildErrorEvent) => void): void
+
+  routes(): Promise&lt;Route[]&gt;
+  triggerBuild(opts?: BuildOpts): Promise&lt;BuildId&gt;
+}</code></pre>
+
+<h3>Adapter implementations</h3>
+
+<p><strong>Vite.</strong> Plugin API with hooks for <code>buildStart</code>, <code>buildEnd</code>, <code>handleHotUpdate</code>. Easiest case. WebSocket connection to Vite's own server for HMR events. Ship this first.</p>
+
+<p><strong>Next.js.</strong> Harder — Next's dev server is more opaque. Two options: (1) a Next plugin that re-exports events; (2) tail the dev server's stdout and parse compilation messages. Plugin route is cleaner if Next exposes the right hooks; stdout-parsing as fallback.</p>
+
+<p><strong>Astro / SvelteKit / Remix.</strong> Most of these are Vite-based under the hood. The Vite adapter usually works with minor adjustments.</p>
+
+<p><strong>Other (webpack, Rollup, esbuild standalone).</strong> Less critical for v0. Ship a generic "tail logs and regex" adapter as a fallback.</p>
+
+<div class="uncertain">
+<p>Next.js's internals change between versions and they aren't stable third-party APIs. We might need version-specific adapters (Next 14, Next 15, Turbopack vs webpack). This is meaningful ongoing work, not a one-time write.</p>
+</div>
+
+<h3>The HMR ↔ browser bridge</h3>
+
+<p>The single most magical user-visible feature: when the dev server emits an HMR update, the browser subsystem receives it and applies it without a full reload. The LLM sees the change reflected in the next semantic-tree query without paying a navigation cost.</p>
+
+<p>This bridge is just an event subscription from the dev server adapter to the browser subsystem, mediated by the orchestration server. The protocol:</p>
+
+<pre><code>devServer → orchestration: HmrUpdateEvent { modules, accepted }
+orchestration → browser.applyHmrUpdate(sessionId, update)
+browser → orchestration: applied { duration_ms } | error</code></pre>
+
+<p>If the in-place HMR update fails (e.g., a state-breaking change), the browser does a full reload as fallback. Either way, the LLM sees a single event in the next digest: "HMR applied" or "HMR fallback → reloaded".</p>
+
+<h2><span class="num">5.4</span>Test and lint runner</h2>
+
+<p>Two adjacent subsystems, often consolidated into one process. Responsibility: run tests and linters on demand, expose results as structured events.</p>
+
+<h3>Test runner integration</h3>
+<p>Vitest first (Vite-native, fastest, growing share). Jest as a fallback. Playwright for E2E when the LLM explicitly asks.</p>
+
+<p>Run Vitest in its programmatic API, not as a child process. This gives us structured access to test results, not stdout-parsing:</p>
+
+<pre><code>import { startVitest } from "vitest/node";
+
+const vitest = await startVitest("test", [], {
+  watch: false,
+  reporters: [customReporterThatEmitsWdpEvents]
+});</code></pre>
+
+<p>Tests emit per-test events as they complete, so the LLM can react to the first failure without waiting for the whole suite.</p>
+
+<h3>Lint runner integration</h3>
+<p>ESLint via its Node API, same pattern. Run on a file-change trigger; cache results; expose diagnostics through WDP.</p>
+
+<p>Prettier integration optional. The LLM is usually fine reading raw prettier output; we don't need a structured surface for it.</p>
+
+<h3>The "what changed" optimization</h3>
+<p>Running the entire test suite or linting the whole project on every LLM turn would be slow and noisy. We use the dep graph from the file watcher: when the LLM edits <code>UserList.tsx</code>, only run tests that transitively import <code>UserList.tsx</code>, only lint <code>UserList.tsx</code> and adjacent files. The "test ran but didn't change result" events get squelched from the digest.</p>
+
+<div class="uncertain">
+<p>Mapping "edits to file X" → "tests affected by file X" requires the test files to be in the dep graph, which they usually are but not always (Vitest config can include tests by glob without explicit imports). May need a per-project hint or auto-discovery on first run.</p>
+</div>
+
+<h2><span class="num">5.5</span>Subsystem supervision</h2>
+
+<p>All subsystems are child processes of the orchestration server. The server owns their lifecycle:</p>
+
+<ul>
+  <li><strong>Spawn:</strong> on demand or at startup, depending on detected capabilities</li>
+  <li><strong>Health:</strong> heartbeat ping every 5s; missed heartbeat → restart</li>
+  <li><strong>Crash:</strong> exit code captured, restart with backoff, emit <code>subsystem.crashed</code> event</li>
+  <li><strong>Resource caps:</strong> per-subsystem RAM and CPU limits via cgroups (Linux) or kernel queues (macOS) where available</li>
+</ul>
+
+<p>The Pi extension never sees subsystem state. From its perspective, the orchestration server just always works.</p>
+
+<h2><span class="num">5.6</span>Where subsystems run</h2>
+
+<p>By default: locally, in the same machine as the user's project. No reason to be elsewhere.</p>
+
+<p>Future considerations (out of scope for MVP):</p>
+
+<ul>
+  <li>Remote orchestration server for cloud development environments (Codespaces, Coder)</li>
+  <li>One server per devcontainer</li>
+  <li>Multi-developer shared orchestration for pair-programming sessions</li>
+</ul>
+
+<p>None of these affect the v0 architecture as long as we keep the protocol clean and stateless-where-possible.</p>
+
+<nav class="nav-foot">
+  <a href="04-browser.html">
+    <span class="label">← Previous</span>
+    <span class="title">Lightweight browser</span>
+  </a>
+  <a href="06-framework-introspection.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Framework introspection</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 05 · subsystems</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Risks and open questions — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 08 · Risks and open questions</span>
+</div>
+
+<h1>Risks <span class="roman">and</span> open questions</h1>
+
+<p class="lede">Where the plan is fragile. Everything below would have killed the project if I'd missed it, so it's listed here. Ordered roughly by severity — the things at the top are existential, the things at the bottom are pacing concerns.</p>
+
+<h2><span class="num">8.1</span>Existential risks</h2>
+
+<h3>R1 — Frontier models become so capable they don't need this</h3>
+
+<p>The defining risk for any agent-tooling product. If Claude 5 / GPT-6 / Gemini 3 can directly use a screenshot of a React app to fix bugs reliably, none of the introspection plumbing matters. The product becomes obsolete the moment models cross the threshold where richer context stops paying off.</p>
+
+<p><strong>Probability:</strong> medium-high on a 2–3 year horizon, low in the next 12 months.</p>
+
+<p><strong>Mitigation:</strong> the product still has value for <em>cost-efficiency</em> reasons even if models can technically use screenshots. A semantic-tree tool call costs 100x fewer tokens than a screenshot, and that economics holds regardless of model capability. If you're shipping autonomous agents at scale, you'll want the cheap path. Position the product on cost-and-latency, not capability.</p>
+
+<p><strong>Trip-wire:</strong> if a new model release demonstrates strong screenshot-based React debugging in a public benchmark, revisit positioning within 30 days.</p>
+
+<h3>R2 — Pi project loses momentum</h3>
+
+<p>Pi is a small project with one primary maintainer. If Mario Zechner pivots or stops investing, you're forking and maintaining yourself, or migrating to a different harness mid-flight.</p>
+
+<p><strong>Probability:</strong> low on a 6-month horizon, medium on a 24-month horizon.</p>
+
+<p><strong>Mitigation:</strong> the architecture deliberately makes Pi replaceable. The orchestration server is the product; Pi is the most ergonomic client. The SDK boundary means a custom CLI, Aider plugin, Claude Code MCP server, or VSCode extension are all viable Plan-Bs.</p>
+
+<p><strong>Trip-wire:</strong> if Pi goes 3+ months without a release or the maintainer's attention visibly shifts elsewhere, prototype the Plan-B harness early so it's not a panic migration.</p>
+
+<h3>R3 — Lightpanda compatibility is fundamentally insufficient</h3>
+
+<p>Lightpanda is young. The long tail of web compatibility — Cloudflare's bot challenge JS, third-party widgets, edge-case Web APIs — may break too often for the product to be trustworthy.</p>
+
+<p><strong>Probability:</strong> medium-high. Lightpanda openly says it's not production-ready for many sites.</p>
+
+<p><strong>Mitigation:</strong> the dev-loop wedge is the helpful constraint. The LLM is working against the user's own dev server, not arbitrary internet sites. The target set is much smaller and more predictable than "any URL". If Vite/Next/Astro work reliably and a handful of common third-party libs (React Router, TanStack Query, Tailwind) work — that's most of the market.</p>
+
+<p><strong>Plan B:</strong> Playwright + Chromium pool with our own perf optimizations. Slower cold-start (~1-2s vs &lt;200ms target) but full compat. The protocol and orchestration server don't change.</p>
+
+<p><strong>Trip-wire:</strong> phase 1 demo at end of week 2. If Lightpanda fails on your own React project, switch to Plan B before phase 2.</p>
+
+<h2><span class="num">8.2</span>Architectural risks</h2>
+
+<h3>R4 — React DevTools internal protocol changes</h3>
+
+<p>The wire protocol between <code>react-devtools-core</code> and the DevTools UI is not formally documented or guaranteed stable. A React or DevTools release could break the integration.</p>
+
+<p><strong>Probability:</strong> low per-release, but cumulative over a year.</p>
+
+<p><strong>Mitigation:</strong> pin to specific react-devtools-core versions; test the integration against React releases in CI before shipping support; expose a fallback "raw Fiber introspection" path that doesn't depend on the DevTools protocol.</p>
+
+<h3>R5 — Sub-100ms cold start is not achievable</h3>
+
+<p>V8 isolate initialization is the dominant cost in Lightpanda's startup. Reusing warm isolates via snapshots gets us under 200ms but adds significant complexity. Hitting the target may require a daemon-with-pool model that's harder to operate.</p>
+
+<p><strong>Probability:</strong> medium.</p>
+
+<p><strong>Mitigation:</strong> the target itself is aspirational. If 300ms is the real floor, the product still wins against 2-5s Playwright cold start. The narrative shifts from "10× faster" to "5× faster", which is fine.</p>
+
+<h3>R6 — The digest is the wrong abstraction</h3>
+
+<p>Per-turn event digests assume the LLM can productively consume a structured summary of environment events. If real testing reveals that LLMs ignore the digest, get confused by it, or prefer pull-style queries, the protocol design needs to change.</p>
+
+<p><strong>Probability:</strong> low-medium.</p>
+
+<p><strong>Mitigation:</strong> phase 2 week 4 is explicitly a tuning pass with go/no-go authority. Be willing to redesign before piling on subsystems. Worth comparing push-digest vs. pull-query side by side on identical tasks.</p>
+
+<div class="uncertain">
+<p>The right design might be hybrid — a tiny push digest (5-10 high-priority events) plus rich pull queries for everything else. Worth prototyping before committing to one model.</p>
+</div>
+
+<h3>R7 — HMR ↔ browser bridge is hard to make robust</h3>
+
+<p>Vite's HMR client expects to be in a real browser with real WebSocket support, real ES modules, and real DOM. Lightpanda doesn't perfectly match all of these. The bridge may need its own HMR client tailored to the lightweight browser.</p>
+
+<p><strong>Probability:</strong> medium.</p>
+
+<p><strong>Mitigation:</strong> the orchestration server can intercept HMR messages from Vite and translate them into direct DOM mutations, bypassing the Vite client entirely. This is more work but produces a more controllable result. Fallback is always a full reload.</p>
+
+<h2><span class="num">8.3</span>Market and competition risks</h2>
+
+<h3>R8 — Cursor, Continue, Cline, or Claude Code ships this first</h3>
+
+<p>All of these are well-funded and actively building toward better dev-loop integration. If Cursor ships native React DevTools integration tomorrow, the differentiation thins.</p>
+
+<p><strong>Probability:</strong> medium.</p>
+
+<p><strong>Mitigation:</strong> the closed-source agents have a structural disadvantage: they're tied to their own UI and editor. Pi-WebDev runs in any terminal, against any agent harness, with an open protocol. The slower the closed agents move on opening their integration surface, the longer the window.</p>
+
+<p><strong>Trip-wire:</strong> if a major closed agent ships component-tree introspection, evaluate within 30 days whether the differentiation is the protocol-openness story or whether to pivot.</p>
+
+<h3>R9 — Developers don't actually want this</h3>
+
+<p>"Faster LLM iteration on web projects" sounds good in theory but might not be a top-3 pain point for developers. They may prefer fewer, slower, higher-quality LLM turns over many fast ones.</p>
+
+<p><strong>Probability:</strong> low for engineers using LLMs heavily, medium for the broader developer market.</p>
+
+<p><strong>Mitigation:</strong> the v0 user is "engineer who already uses Cursor/Claude Code daily and feels the iteration friction." That's a real, identifiable audience of tens of thousands of users. Don't try to convince developers who don't already feel the pain.</p>
+
+<h3>R10 — The "open source orchestration server" doesn't have a business model</h3>
+
+<p>If everything is MIT-licensed and runs locally, there's no obvious monetization path. Open core (paid features) or cloud-hosted variant are both possible but require committing to a business model that's not yet defined.</p>
+
+<p><strong>Probability:</strong> certain.</p>
+
+<p><strong>Mitigation:</strong> v0 is the wrong time to solve this. Ship the open protocol, get adoption, then figure out the business model from a position of mindshare. Most plausible paths: hosted multi-machine orchestration, enterprise audit/compliance features, a hosted dashboard, paid framework adapters for niche tech stacks.</p>
+
+<h2><span class="num">8.4</span>Operational risks</h2>
+
+<h3>R11 — Eight weeks is too short</h3>
+
+<p>The roadmap assumes near-full-time work and no major distractions. Family, day job, illness, or a single hard bug can extend any phase by weeks.</p>
+
+<p><strong>Probability:</strong> high.</p>
+
+<p><strong>Mitigation:</strong> the phases are designed so that a partial completion is still a coherent product. Phase 1 alone (browser + Pi extension) is a small but real tool. Phase 2 adds dev-loop integration. You can pause after any phase and have something usable.</p>
+
+<h3>R12 — Subsystem complexity compounds</h3>
+
+<p>Each subsystem has its own quirks, edge cases, and platform-specific bugs. By the time you've integrated five of them, you're maintaining a meaningful operational surface even for local-only use.</p>
+
+<p><strong>Probability:</strong> high; this is the nature of the work.</p>
+
+<p><strong>Mitigation:</strong> ruthless subsystem interface discipline. The internal API to each subsystem stays small. Crashes are contained. Logs are structured. Health checks catch issues before users do. None of this is glamorous but it's the difference between a tool people use and a tool people give up on.</p>
+
+<h3>R13 — Distribution to developers is harder than expected</h3>
+
+<p>Even great dev tools take months or years to find adoption. Vite took 18 months to reach mainstream awareness. Bun took similar. Pi-WebDev has the additional burden of "explain why you'd use a custom orchestration server when X already works".</p>
+
+<p><strong>Probability:</strong> high.</p>
+
+<p><strong>Mitigation:</strong> demo videos are load-bearing. People need to <em>see</em> the dev loop running 5× faster, not read about it. Phase 4 week 8 budget for video work is non-negotiable.</p>
+
+<h2><span class="num">8.5</span>Open questions for the spike</h2>
+
+<p>Things to deliberately leave un-decided until the phase 0 spike produces evidence:</p>
+
+<div class="uncertain">
+<p><strong>Q1.</strong> Does the LLM prefer a token-bounded digest or pull-style queries for environment events?</p>
+</div>
+
+<div class="uncertain">
+<p><strong>Q2.</strong> Is the orchestration server's overhead noticeable to the LLM (latency-wise) or is the model API call always the bottleneck?</p>
+</div>
+
+<div class="uncertain">
+<p><strong>Q3.</strong> Does Lightpanda load Vite's HMR client out of the box, or do we need a custom HMR bridge?</p>
+</div>
+
+<div class="uncertain">
+<p><strong>Q4.</strong> How does Pi's context compaction interact with per-turn event digests over a long session? Does it lose important context?</p>
+</div>
+
+<div class="uncertain">
+<p><strong>Q5.</strong> What's the right granularity for "what changed" — file-level, function-level, line-level? Each has different implementation cost and different value to the LLM.</p>
+</div>
+
+<div class="uncertain">
+<p><strong>Q6.</strong> Should component IDs be globally unique across sessions or scoped per browser session? Affects how the LLM references components in multi-tab debugging.</p>
+</div>
+
+<p>Each of these will get a default answer in the v0 implementation. The defaults are explicitly provisional.</p>
+
+<h2><span class="num">8.6</span>What I'd do differently if I were less constrained</h2>
+
+<p>Honest sketch of paths not taken:</p>
+
+<p><strong>If I had 6 months instead of 2:</strong> fork Lightpanda from the start with a careful set of patches for HMR + framework introspection. The integration would be cleaner. With 8 weeks, stock Lightpanda is the right choice.</p>
+
+<p><strong>If I were starting a company, not a project:</strong> probably skip the local-first design and build a hosted orchestration service. Easier monetization, harder distribution. The local-first design is the right call for v0 because it avoids cloud spend and lets early users self-onboard.</p>
+
+<p><strong>If I had a strong frontend co-founder:</strong> build a visual dashboard for the orchestration server's state. A TUI / web UI showing live build status, type errors, component tree, browser session. Right now it's all LLM-mediated, which is fine but not great for human debugging.</p>
+
+<h2><span class="num">8.7</span>The single biggest thing to verify before committing</h2>
+
+<p>Before the eight-week clock starts, do the phase 0 spike and answer one question: <strong>does the LLM actually iterate faster with this architecture than with stock Playwright + Claude Code?</strong></p>
+
+<p>If yes, even modestly, the plan is worth executing. If no, the wedge isn't what we think it is, and the diagnosis needs to happen before any phase 1 work.</p>
+
+<p>The phase 0 spike is the one piece of work that has the highest information value per hour invested. Do it before anything else.</p>
+
+<nav class="nav-foot">
+  <a href="07-roadmap.html">
+    <span class="label">← Previous</span>
+    <span class="title">Roadmap</span>
+  </a>
+  <a href="../index.html" class="next">
+    <span class="label">↑ Top</span>
+    <span class="title">Back to plan</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 08 · risks</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

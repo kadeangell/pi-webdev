@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roadmap — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 07 · Roadmap</span>
+</div>
+
+<h1><span class="roman">Roadmap</span></h1>
+
+<p class="lede">An eight-week MVP, in four phases. Each phase has one demo-able outcome and one go/no-go decision at the end. The intent is to validate the hardest assumptions early — the lightweight browser and framework introspection — and defer the polish work.</p>
+
+<h2><span class="num">7.0</span>Phase 0 — Spike (week 0)</h2>
+
+<p>One week before the formal plan kicks off. Goal: prove the smallest meaningful loop end-to-end with the worst code you can stand to write.</p>
+
+<h3>Deliverable</h3>
+<p>A 200-line Pi extension that exposes three tools (<code>browser.navigate</code>, <code>browser.dom</code>, <code>browser.eval</code>) against stock Lightpanda. Run Pi against your latest React project. Ask Claude (via Pi) to fix a bug. Watch where the friction is.</p>
+
+<h3>Why this matters</h3>
+<p>The spike is the document that tells you what the protocol should actually look like, built from real friction rather than from a whiteboard. Everything in the formal plan below should be revisited after this week.</p>
+
+<h3>Go/no-go</h3>
+<p>If after one week the LLM can fix a one-line bug in a React project, even slowly, you have signal that the architecture works. If Lightpanda crashes on the test project or can't load Vite's HMR client, that's an early indicator to revisit <a href="04-browser.html">section 04</a> before committing further.</p>
+
+<h2><span class="num">7.1</span>Phase 1 — Foundation (weeks 1–2)</h2>
+
+<p>Goal: ship a working orchestration server with the browser subsystem and a minimal Pi extension, end-to-end.</p>
+
+<h3>Week 1 — Skeleton</h3>
+<ul>
+  <li>Repo setup. Monorepo (pnpm workspaces): <code>packages/server</code>, <code>packages/pi-extension</code>, <code>packages/shared-types</code></li>
+  <li>WDP wire format and basic transport (WebSocket, JSON framing)</li>
+  <li>Capability negotiation handshake</li>
+  <li>Subsystem supervision skeleton (spawn, heartbeat, restart)</li>
+  <li>Pi extension registers a single tool (<code>$/ping</code>) that round-trips through WDP</li>
+</ul>
+
+<h3>Week 2 — Browser subsystem</h3>
+<ul>
+  <li>Integrate Lightpanda as a child process</li>
+  <li>Implement <code>browser.navigate</code>, <code>browser.dom</code>, <code>browser.eval</code>, <code>browser.click</code>, <code>browser.fill</code></li>
+  <li>Semantic-tree extraction (no layout; just text, ARIA, visibility, form state)</li>
+  <li>Console and network event streaming</li>
+  <li>End-to-end: LLM can navigate to <code>localhost:3000</code> and read the page</li>
+</ul>
+
+<h3>Demo at end of phase 1</h3>
+<p>Pi session: "Tell me what's on the homepage of localhost:3000." LLM uses <code>browser.navigate</code> and <code>browser.dom</code>, returns a summary. Total time from <code>pi</code> start to answer: &lt;3s.</p>
+
+<h3>Go/no-go</h3>
+<p>If Lightpanda can't reliably render your target React projects, swap to the Plan B (Playwright + Chromium pool, slower but works). Don't continue with the rest of the plan on a foundation that's broken.</p>
+
+<h2><span class="num">7.2</span>Phase 2 — Dev loop (weeks 3–4)</h2>
+
+<p>Goal: wire in the file watcher, dev server adapter, and the per-turn digest. This is the phase that delivers the "agent feels the dev loop" magic.</p>
+
+<h3>Week 3 — File watcher + Vite adapter</h3>
+<ul>
+  <li>File watcher using chokidar; project index with ignore rules</li>
+  <li>Dependency graph for TypeScript/JavaScript (esbuild-based scanner)</li>
+  <li>Vite adapter: detect Vite, hook into plugin API for build events and HMR</li>
+  <li>WDP <code>files.*</code> and <code>build.*</code> methods</li>
+  <li>HMR ↔ browser bridge: when Vite emits an HMR update, browser subsystem applies it</li>
+</ul>
+
+<h3>Week 4 — Digest + per-turn injection</h3>
+<ul>
+  <li>Event coalescing and buffering on the orchestration server</li>
+  <li>Digest formatter — token-bounded, recency-weighted, summary-first</li>
+  <li>Pi extension's <code>onTurnStart</code> hook injects the digest as a system message</li>
+  <li>Tuning pass: run real sessions, measure digest token cost vs. agent quality</li>
+</ul>
+
+<h3>Demo at end of phase 2</h3>
+<p>Pi session: "Add a button to the homepage that increments a counter." LLM edits the file, sees the HMR event in the next turn's digest, queries the DOM to verify, fixes any type errors that appeared. Total iteration: 2-3 turns instead of 6-8.</p>
+
+<h3>Go/no-go</h3>
+<p>If the digest is consistently making things worse (over-injecting noise, distracting the agent from the user's question), redesign the digest format before adding more subsystems. Don't pile on; fix the foundation first.</p>
+
+<h2><span class="num">7.3</span>Phase 3 — Types and tests (weeks 5–6)</h2>
+
+<p>Goal: hook in the LSP and test runner. The agent stops needing to "run npm test" and parse stdout; it gets structured signals.</p>
+
+<h3>Week 5 — TypeScript LSP</h3>
+<ul>
+  <li>Spawn and manage tsserver as a child process</li>
+  <li>Project boundary detection (one tsserver per tsconfig)</li>
+  <li>Implement <code>types.diagnostics</code>, <code>types.hoverInfo</code>, <code>types.definition</code>, <code>types.references</code></li>
+  <li>Diagnostic events stream into the digest with <code>added</code>, <code>removed</code>, <code>modified</code> deltas</li>
+  <li>Add <code>types.diagnostics</code> to the Pi tool surface</li>
+</ul>
+
+<h3>Week 6 — Test and lint</h3>
+<ul>
+  <li>Vitest integration via programmatic API</li>
+  <li>ESLint integration via Node API</li>
+  <li>Affected-tests-only optimization using the dep graph from week 3</li>
+  <li>Test events into the digest; lint diagnostics into the digest</li>
+  <li>Implement <code>test.run</code> and <code>lint.diagnostics</code> tools</li>
+</ul>
+
+<h3>Demo at end of phase 3</h3>
+<p>Pi session: "The UserList test is failing — fix it." LLM sees the test failure in the initial digest (no need to run tests manually), reads the test, reads the component, makes a fix, sees the test pass in the next digest. Done in 3-4 turns.</p>
+
+<h3>Go/no-go</h3>
+<p>If tsserver integration is flaky (false positives, slow startup, memory leaks), consider falling back to a simpler <code>tsc --watch</code> spawn-and-parse-stdout approach. Real tsserver is better when it works but isn't worth weeks of pain.</p>
+
+<h2><span class="num">7.4</span>Phase 4 — Framework introspection + first release (weeks 7–8)</h2>
+
+<p>Goal: ship React component introspection — the differentiating feature — and make a public 0.1 release.</p>
+
+<h3>Week 7 — React DevTools backend integration</h3>
+<ul>
+  <li>Inject <code>react-devtools-core</code> backend into the page on browser subsystem startup</li>
+  <li>WebSocket bridge between the in-page backend and the orchestration server</li>
+  <li>Implement <code>inspect.componentTree</code>, <code>inspect.props</code>, <code>inspect.state</code></li>
+  <li>Stable component ID synthesis (path + name + key hash)</li>
+  <li>Indexed hook value extraction (no source-map analysis yet)</li>
+</ul>
+
+<h3>Week 8 — Polish and release</h3>
+<ul>
+  <li><code>pi-webdev init</code> command, daemon installer</li>
+  <li>Docs site (this site, made public)</li>
+  <li>Three high-quality demo videos: "fix a React bug", "add a feature with HMR", "debug a failing test"</li>
+  <li>npm publish: <code>@pi-webdev/server</code> and <code>@pi-webdev/coding-agent</code></li>
+  <li>Public 0.1 release</li>
+</ul>
+
+<h3>Demo at end of phase 4</h3>
+<p>Public, with a short showreel demonstrating each subsystem doing its part. Open-source the protocol spec and the server. Soft launch on HN, Show HN, relevant Discords.</p>
+
+<h2><span class="num">7.5</span>What's deliberately not in the MVP</h2>
+
+<p>Worth being explicit about deferred scope:</p>
+
+<ul>
+  <li><strong>Vue, Svelte, Solid introspection.</strong> React first; others when there's clear demand or contributor energy.</li>
+  <li><strong>Source-map-aware hook naming.</strong> Indexed hooks ship in v0; named hooks in 0.2.</li>
+  <li><strong>Next.js dev server adapter.</strong> Vite first. Next requires version-specific work; ship after the Vite path is solid.</li>
+  <li><strong>Production-build introspection.</strong> Dev-mode only in v0.</li>
+  <li><strong>Time-travel debugging.</strong> Tree snapshots per commit are easy to add later; not v0.</li>
+  <li><strong>Multi-project orchestration.</strong> One project per server instance for now.</li>
+  <li><strong>Remote orchestration / cloud devcontainers.</strong> Local only.</li>
+  <li><strong>MCP server bridge.</strong> Sketched, not built. Add when a real MCP customer asks.</li>
+  <li><strong>Visual regression testing.</strong> The Chromium escape hatch handles ad-hoc screenshots; full VRT is a separate product.</li>
+  <li><strong>Code generation skills.</strong> No <code>/generate-component</code> built-ins — leave that to Pi's existing flexibility.</li>
+</ul>
+
+<h2><span class="num">7.6</span>Beyond MVP — direction without commitment</h2>
+
+<p>What 0.2 through 1.0 might look like, ordered by likely value:</p>
+
+<ol>
+  <li>Next.js adapter (clears the biggest single-framework gap)</li>
+  <li>Vue 3 introspection (largest non-React community)</li>
+  <li>Source-map-aware hook naming (large quality-of-life improvement for React)</li>
+  <li>Visual correlation: map a screenshot region back to the component that rendered it</li>
+  <li>Production-build introspection via source maps</li>
+  <li>Cloud orchestration server for Codespaces, Coder, etc.</li>
+  <li>Plugin SDK for community-contributed framework adapters</li>
+</ol>
+
+<p>None of these are committed. The MVP usage data will pick the order.</p>
+
+<h2><span class="num">7.7</span>Resource shape</h2>
+
+<p>What "ship the MVP" actually takes:</p>
+
+<table>
+  <thead>
+    <tr><th>Resource</th><th>Phase 0–4 estimate</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Engineering (you, full-time)</td><td>8 weeks</td></tr>
+    <tr><td>Engineering (one collaborator, part-time)</td><td>Helpful but not required</td></tr>
+    <tr><td>Cloud / infra spend</td><td>Near zero — local-first</td></tr>
+    <tr><td>Tooling (model API costs for dogfooding)</td><td>~$50–200/month</td></tr>
+    <tr><td>Design (this docs site, demo videos)</td><td>Maybe 1 week of focused work in phase 4</td></tr>
+  </tbody>
+</table>
+
+<div class="honest">
+<p>Eight weeks is aggressive but feasible if you stay disciplined about scope. The plan above includes everything needed for a credible 0.1 — no more, no less. Every "wouldn't it be nice if" is in the deferred list above, on purpose.</p>
+</div>
+
+<h2><span class="num">7.8</span>What to do first (today)</h2>
+
+<p>Before any of the above:</p>
+
+<ol>
+  <li>Clone Pi locally and read its source. The extension API contract has to live in your head before you write the first line of <code>pi-webdev</code>.</li>
+  <li>Clone Lightpanda and run it. Open the project you most often work on, try basic operations. Find one site or framework it breaks on, just to calibrate your expectations.</li>
+  <li>Write the spike (phase 0 deliverable) before week 1 starts. The friction you find there shapes everything downstream.</li>
+</ol>
+
+<p>If after step 2 Lightpanda is clearly not going to work, swap to Plan B (Playwright + Chromium pool) for v0 and revisit lightweight-browser exploration in a separate workstream. Don't let browser choice become a critical-path blocker.</p>
+
+<nav class="nav-foot">
+  <a href="06-framework-introspection.html">
+    <span class="label">← Previous</span>
+    <span class="title">Framework introspection</span>
+  </a>
+  <a href="08-risks.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Risks and open questions</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 07 · roadmap</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 01 · Architecture</span>
+</div>
+
+<h1><span class="roman">Architecture</span></h1>
+
+<p class="lede">Five layers, one shared protocol, a strict separation between the LLM brain and the local dev environment. State lives in the orchestration server, not in Pi and not in any subsystem. That's the single most important design decision in the system.</p>
+
+<h2><span class="num">1.1</span>The five layers</h2>
+
+<p>From top to bottom:</p>
+
+<h3>Layer 1 — LLM</h3>
+<p>Any frontier model. The orchestration system is model-agnostic by design, because the model choice changes every few months and you don't want the rest of the stack coupled to it. Pi already supports 15+ providers; we inherit that. The LLM's interface to the world is the Pi tool surface.</p>
+
+<h3>Layer 2 — Pi (agent harness)</h3>
+<p>Pi handles the loop primitives: turn-taking, tool calls, message history, context compaction, skill loading. We don't replace any of that. Pi's RPC mode (JSON over stdin/stdout) and SDK mode (embed-as-library) are the two integration surfaces we use.</p>
+
+<h3>Layer 3 — Orchestration server</h3>
+<p>The new piece. A long-running local process that maintains an authoritative model of dev environment state — files, type errors, build status, browser sessions, framework state — and exposes it to Pi via the WebDev Protocol (WDP). All subsystems are children of this process. State changes flow up; commands flow down.</p>
+
+<h3>Layer 4 — Subsystems</h3>
+<p>Independent processes the orchestration server supervises. The lightweight browser, file watcher, TypeScript LSP, dev server adapter, test runner, framework introspection. Each speaks a narrow internal protocol to the orchestration server. None of them talk to Pi directly.</p>
+
+<h3>Layer 5 — The user's project</h3>
+<p>The thing being worked on. The orchestration server treats this as read/write source-of-truth for files but maintains its own indexed view (build status, dep graph, type errors, current browser state) so the LLM doesn't pay re-indexing cost every turn.</p>
+
+<h2><span class="num">1.2</span>Why this shape</h2>
+
+<p>Three principles drove the layering:</p>
+
+<p><strong>Single source of truth for state.</strong> If both Pi and the orchestration server tried to track build status, they'd drift. The orchestration server owns state; Pi reads it through queries. This is the same reason React has one reducer per concern.</p>
+
+<p><strong>Subsystems are replaceable.</strong> Lightpanda might not work out — we should be able to swap in Chromium-via-CDP without changing the protocol. Vite's adapter implementation has nothing to do with Next.js's. The orchestration server provides a stable boundary that absorbs subsystem churn.</p>
+
+<p><strong>Pi is opinionated, but we're not.</strong> Pi has decided to skip MCP, sub-agents, and plan mode. Some users will want those things. The orchestration server should be usable from <em>any</em> agent harness — Pi is just the most ergonomic one to start with. The SDK boundary makes that possible.</p>
+
+<h2><span class="num">1.3</span>Dataflow</h2>
+
+<p>Two distinct flows, with different latency profiles:</p>
+
+<h4>Command flow (LLM → environment)</h4>
+<pre><code>LLM   →   Pi tool call   →   RPC to orchestration server
+                                ↓
+                              dispatch to subsystem
+                                ↓
+                              return typed result
+                                ↑
+                              event bus updates internal state
+                                ↑
+                              Pi receives response, continues turn</code></pre>
+
+<p>Latency target: sub-50ms for read operations, sub-200ms for writes that touch the dev server. The orchestration server caches aggressively; reads that hit cache should be sub-5ms.</p>
+
+<h4>Event flow (environment → LLM)</h4>
+<pre><code>subsystem emits event   →   orchestration server
+                              ↓
+                            event bus, with backpressure
+                              ↓
+                            buffered until next Pi turn
+                              ↓
+                            injected into context as system message</code></pre>
+
+<p>Events don't interrupt the LLM mid-turn. They're batched and surfaced at the start of the next turn as a digest, scoped to events that are relevant to recently-edited code. Without this digest, an LLM editing a React component would get a flood of "file changed, build started, build finished, HMR fired, browser updated" events that bury the actual signal.</p>
+
+<div class="uncertain">
+<p>The event digest format is the single most important design problem in the protocol, and I don't have a final answer. The naive approach (a JSON object dumped into a system message) wastes tokens. A structured summary the LLM can choose to expand needs careful prompt engineering. Worth prototyping three or four formats against real workloads before committing.</p>
+</div>
+
+<h2><span class="num">1.4</span>Where state lives</h2>
+
+<table>
+  <thead>
+    <tr><th>State</th><th>Owner</th><th>Lifetime</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Conversation history</td><td>Pi</td><td>Per session</td></tr>
+    <tr><td>Project file index</td><td>Orchestration server</td><td>Process-long, persists across Pi sessions</td></tr>
+    <tr><td>Dependency graph</td><td>Orchestration server</td><td>Process-long</td></tr>
+    <tr><td>Type errors</td><td>Subsystem (LSP)</td><td>Streamed; orchestration caches latest</td></tr>
+    <tr><td>Build status</td><td>Subsystem (dev server)</td><td>Streamed; orchestration caches latest</td></tr>
+    <tr><td>Browser session</td><td>Subsystem (browser)</td><td>Per browser context</td></tr>
+    <tr><td>Component tree snapshot</td><td>Subsystem (framework introspection)</td><td>Live, queried on-demand</td></tr>
+    <tr><td>Skills, AGENTS.md content</td><td>Pi</td><td>Per session, file-backed</td></tr>
+  </tbody>
+</table>
+
+<p>One useful consequence: an orchestration server can be running long before Pi attaches, and can keep running after Pi quits. You can imagine a daemon model where the server is started by your editor or shell login, indexing your project continuously, so when you fire up Pi it has immediate full context.</p>
+
+<h2><span class="num">1.5</span>What CDP does and what it misses</h2>
+
+<p>Chrome DevTools Protocol gives you a runtime view of one browser:</p>
+
+<ul>
+  <li>Page lifecycle (navigate, load, unload)</li>
+  <li>DOM and CSSOM access</li>
+  <li>JS evaluation and console output</li>
+  <li>Network requests in and out of the page</li>
+  <li>Input synthesis (mouse, keyboard)</li>
+  <li>Screenshots and PDF rendering</li>
+</ul>
+
+<p>What it doesn't give you, and what WDP needs to:</p>
+
+<ul>
+  <li>File system state — what files exist, what changed, what depends on what</li>
+  <li>Type system state — TypeScript errors with positions, hover info, definitions</li>
+  <li>Build state — compilation status, bundling errors, asset graph</li>
+  <li>Dev server state — HMR events, route table, middleware chain</li>
+  <li>Framework state — React component tree with props, hook values, context</li>
+  <li>Test state — pass/fail per test, with diffed output</li>
+  <li>Lint state — diagnostics from ESLint, Prettier, project-specific rules</li>
+</ul>
+
+<p>The point isn't that CDP is bad — it's that CDP solves one narrow problem and we're solving a wider one. Internally, the lightweight browser subsystem speaks something close to CDP for compatibility. The orchestration server's public protocol (WDP) is the superset.</p>
+
+<h2><span class="num">1.6</span>Why a server, not a library</h2>
+
+<p>One alternative architecture: ship the orchestration logic as a TypeScript library that Pi loads as an extension. No separate process. Simpler.</p>
+
+<p>Reasons not to:</p>
+
+<p><strong>Long-running indexing.</strong> File watching, TypeScript incremental compilation, dependency-graph maintenance — these want to outlive any single agent session. A daemon stays warm; a library reloads cold.</p>
+
+<p><strong>Multiple clients.</strong> One orchestration server should be usable by Pi, by your IDE, by a CI test, by an MCP-compatible agent. A library binds you to one host.</p>
+
+<p><strong>Subsystem supervision.</strong> The browser, LSP, dev server adapter are subprocesses. Pi shouldn't be in the business of managing those.</p>
+
+<p><strong>Crash isolation.</strong> If the LSP crashes, you don't want Pi to crash. Separate process, separate fate.</p>
+
+<div class="honest">
+<p>The cost of this choice is the protocol becomes a real public artifact you have to version and document, instead of "whatever the library API happens to be this week." For a product, that's correct. For a personal tool, it'd be over-engineering.</p>
+</div>
+
+<nav class="nav-foot">
+  <a href="../index.html">
+    <span class="label">Up</span>
+    <span class="title">Plan overview</span>
+  </a>
+  <a href="02-pi-integration.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Pi integration</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 01 · architecture</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pi integration — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 02 · Pi integration</span>
+</div>
+
+<h1><span class="roman">Pi</span> integration</h1>
+
+<p class="lede">Pi is the agent harness, not the product. We integrate via a single npm package — a Pi extension that contributes tools, skills, prompt templates, and a per-turn context injector. Everything routes through the orchestration server; Pi just provides the loop.</p>
+
+<h2><span class="num">2.1</span>Why Pi over the alternatives</h2>
+
+<p>The current landscape of coding agent harnesses, ordered roughly by maturity:</p>
+
+<table>
+  <thead>
+    <tr><th>Harness</th><th>Strengths</th><th>Why not it</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Claude Code</td><td>Polished, Anthropic-backed, great defaults</td><td>Closed extension surface, hard to customize the tool loop</td></tr>
+    <tr><td>Cursor / Continue</td><td>IDE-integrated, great UX</td><td>Editor-coupled; we want a headless dev loop, not a GUI</td></tr>
+    <tr><td>Cline</td><td>Strong tool-calling primitives</td><td>VSCode-coupled; harder to use as a CLI/CI tool</td></tr>
+    <tr><td>Aider</td><td>Excellent file editing, mature</td><td>Workflow is opinionated; less extensible than Pi</td></tr>
+    <tr><td>Custom (from scratch)</td><td>Total control</td><td>Months of work to rebuild what Pi gives you</td></tr>
+    <tr><td><strong>Pi</strong></td><td>Minimal core, RPC + SDK modes, real extension system, MIT license</td><td>Young project; small team behind it</td></tr>
+  </tbody>
+</table>
+
+<p>Pi's "primitives, not features" philosophy is exactly what you want when you're building a domain-specific agent: it gets out of the way. Most harnesses fight you when you want to inject custom context, override file-write behavior, or add tools that aren't MCP. Pi assumes you'll do those things and provides the hooks.</p>
+
+<div class="honest">
+<p>Pi is young — one primary maintainer (Mario Zechner / Earendil) and a small contributor base. The risk is real and I cover it in <a href="08-risks.html">risks</a>. The mitigation is that everything we build is independently usable via SDK mode and a stable protocol, so an alternative harness can be wired in if needed.</p>
+</div>
+
+<h2><span class="num">2.2</span>The four integration surfaces</h2>
+
+<p>Pi exposes four surfaces an extension can contribute to. We use all of them:</p>
+
+<h3>Tools</h3>
+<p>Functions the LLM can call. Each tool maps to a WDP method on the orchestration server. Pi handles schema validation, error formatting, and result serialization.</p>
+
+<h3>Skills</h3>
+<p>Capability bundles loaded on-demand. A skill is a folder with a <code>SKILL.md</code> describing when to load it and what tools come along. We ship skills like <code>webdev-react</code>, <code>webdev-vue</code>, <code>webdev-next</code>, <code>webdev-test</code> — each providing framework-specific context and a curated tool subset.</p>
+
+<h3>Prompt templates</h3>
+<p>Markdown files invoked by typing <code>/name</code>. We ship a handful: <code>/fix-types</code> (load type errors, suggest fixes), <code>/add-route</code> (scaffold a new route), <code>/debug-render</code> (introspect component state and diagnose).</p>
+
+<h3>Per-turn context injection</h3>
+<p>An extension hook that runs before every turn. We use it to inject a digest of recent events — build status, type errors that changed since last turn, HMR updates. This is where the "agent feels the dev loop" magic happens.</p>
+
+<h2><span class="num">2.3</span>The extension shape</h2>
+
+<p>A single npm package, <code>@pi-webdev/coding-agent</code>, with this layout:</p>
+
+<pre><code>@pi-webdev/coding-agent/
+├── package.json
+├── pi-extension.ts          # entry point
+├── tools/
+│   ├── browser.ts
+│   ├── files.ts
+│   ├── types.ts
+│   ├── test.ts
+│   └── inspect.ts
+├── skills/
+│   ├── webdev-react/SKILL.md
+│   ├── webdev-vue/SKILL.md
+│   ├── webdev-next/SKILL.md
+│   └── webdev-test/SKILL.md
+├── prompts/
+│   ├── fix-types.md
+│   ├── add-route.md
+│   └── debug-render.md
+└── server/
+    └── client.ts            # WDP client, talks to orchestration server</code></pre>
+
+<p>Sketch of the entry point:</p>
+
+<pre><code>// pi-extension.ts
+import { defineExtension } from "@earendil-works/pi-coding-agent";
+import { WdpClient } from "./server/client";
+import { browserTools } from "./tools/browser";
+import { fileTools } from "./tools/files";
+import { typeTools } from "./tools/types";
+
+export default defineExtension({
+  name: "pi-webdev",
+  version: "0.1.0",
+
+  async setup({ registerTool, registerSkill, onTurnStart }) {
+    const wdp = await WdpClient.connect({
+      url: process.env.WDP_URL ?? "ws://localhost:48710"
+    });
+
+    // Tool registration — each tool routes to WDP
+    for (const tool of [...browserTools, ...fileTools, ...typeTools]) {
+      registerTool(tool.name, tool.schema, async (args) => {
+        return wdp.call(tool.method, args);
+      });
+    }
+
+    // Per-turn context injection
+    onTurnStart(async (ctx) => {
+      const digest = await wdp.call("env.digestSinceLastTurn", {
+        sinceTimestamp: ctx.lastTurnTimestamp
+      });
+      if (digest.events.length > 0) {
+        ctx.appendSystemMessage(formatDigest(digest));
+      }
+    });
+  }
+});</code></pre>
+
+<p>The actual tool implementations are thin — they exist mostly to give Pi an idiomatic surface (good schemas, helpful errors, clear naming). All real work happens in the orchestration server.</p>
+
+<h2><span class="num">2.4</span>Skills as scope</h2>
+
+<p>Skills are how we keep the tool surface small per turn. The full extension might register 30 tools, but a React project only needs maybe 12 of them. The skill system handles this — when the LLM types <code>/use webdev-react</code> or when project detection kicks in, only React-relevant tools are exposed.</p>
+
+<p>A skill is a folder with <code>SKILL.md</code> describing trigger conditions and the tool subset:</p>
+
+<pre><code>---
+name: webdev-react
+description: Use for React projects. Provides component
+  introspection (props, state, hooks), JSX-aware browser
+  selectors, and React DevTools-compatible queries.
+tools:
+  - browser.*
+  - inspect.componentTree
+  - inspect.componentProps
+  - inspect.componentState
+  - inspect.hookValues
+  - test.runVitest
+auto-load-when:
+  - file-exists: package.json && deps include "react"
+---
+
+# When working in a React project, ...
+</code></pre>
+
+<h2><span class="num">2.5</span>AGENTS.md per project</h2>
+
+<p>Pi auto-loads <code>AGENTS.md</code> from the current directory and ancestors. We exploit this — the orchestration server, on startup, scans the project and writes an <code>AGENTS.md</code> (or contributes to one) with project-specific facts: framework, routing strategy, test runner, lint config, paths convention. The LLM gets this context for free at every turn.</p>
+
+<div class="uncertain">
+<p>This may interact badly with users who already maintain their own <code>AGENTS.md</code>. Three options to choose between: append to the existing file, write a separate <code>AGENTS.local.md</code> the orchestration server owns, or surface the context dynamically via the per-turn injector instead of writing it to disk. Probably the last one — disk writes feel intrusive.</p>
+</div>
+
+<h2><span class="num">2.6</span>How a user installs this</h2>
+
+<p>From a clean machine with Node installed:</p>
+
+<pre><code># Install Pi
+curl -fsSL https://pi.dev/install.sh | sh
+
+# Install the orchestration server (also npm-distributable)
+npm install -g @pi-webdev/server
+
+# In your project directory
+pi-webdev init             # writes a config, starts the daemon
+pi install @pi-webdev/coding-agent
+
+# Run
+pi                         # Pi starts, sees the extension,
+                           # connects to the running daemon</code></pre>
+
+<p>The daemon part is important — most users will want it running continuously, not started per session. A LaunchAgent on macOS, a systemd user unit on Linux, a Service on Windows. The <code>init</code> command sets that up.</p>
+
+<h2><span class="num">2.7</span>Escape hatches</h2>
+
+<p>Three things we keep deliberately open:</p>
+
+<p><strong>SDK mode.</strong> The orchestration server is usable as a TypeScript library too, not just via WDP. Other harnesses (Claude Code via MCP, Aider via plugin, a custom CLI) can embed it directly.</p>
+
+<p><strong>MCP bridge.</strong> Pi explicitly skips MCP, but the orchestration server can expose an MCP server for clients that want it. This lets non-Pi agents use the same backend.</p>
+
+<p><strong>Raw WDP.</strong> Anyone can write their own client. The protocol is documented (see <a href="03-protocol.html">section 03</a>), open, and stable.</p>
+
+<p>The goal is that no one ever feels locked into Pi. Pi is the most ergonomic on-ramp; the orchestration server is the actual product.</p>
+
+<nav class="nav-foot">
+  <a href="01-architecture.html">
+    <span class="label">← Previous</span>
+    <span class="title">Architecture</span>
+  </a>
+  <a href="03-protocol.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">The WDP protocol</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 02 · pi integration</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

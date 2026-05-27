@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Framework introspection — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 06 · Framework introspection</span>
+</div>
+
+<h1>Framework <span class="roman">introspection</span></h1>
+
+<p class="lede">The novel piece. React, Vue, and Svelte all have internal trees of components with props, state, and hooks. CDP can't see any of it. We expose the component tree as a first-class queryable structure — so the LLM can ask "what props does this Button receive in the current render" without screenshotting.</p>
+
+<h2><span class="num">6.1</span>Why this matters more than anything else in the system</h2>
+
+<p>Watch a developer debug a React bug. They open the React DevTools panel, find the component in the tree, look at its props and hooks, and 70% of the time the bug is immediately visible. The DOM is a downstream representation; the component tree is the upstream cause.</p>
+
+<p>LLMs today don't have this. They either get a screenshot (expensive, ambiguous) or a DOM dump (downstream, hard to map back to source). Neither tells them <em>which component is misbehaving and why</em>.</p>
+
+<p>If we ship just one differentiating feature in v0, this should be it. The protocol and the lightweight browser are infrastructure; framework introspection is the capability that makes an agent meaningfully better at React work than Cursor or Claude Code.</p>
+
+<h2><span class="num">6.2</span>How React DevTools actually works</h2>
+
+<p>React DevTools is two pieces:</p>
+
+<ul>
+  <li><strong>Backend</strong> — a JS module that runs inside the page, hooks into React via <code>__REACT_DEVTOOLS_GLOBAL_HOOK__</code>, walks the Fiber tree, and exposes operations</li>
+  <li><strong>Frontend</strong> — the UI you see in the browser extension. Talks to the backend over <code>window.postMessage</code> or a port</li>
+</ul>
+
+<p>We use only the backend. We inject it at page load (before any user JS runs), connect to it via the browser subsystem, and expose its operations through WDP. The DevTools UI is replaced by the LLM and the orchestration server.</p>
+
+<h3>The <code>__REACT_DEVTOOLS_GLOBAL_HOOK__</code> contract</h3>
+
+<p>React itself checks for this global at module init. If present, React calls into it on every commit (when the tree changes). The hook gets:</p>
+
+<ul>
+  <li>The renderer instance (one per ReactDOM/React Native/etc.)</li>
+  <li>The Fiber tree root</li>
+  <li>Commit events with priority and reason</li>
+</ul>
+
+<p>The backend installs this hook and uses it to maintain a mirror of the Fiber tree, then walks the tree to extract props, state, and hooks on demand.</p>
+
+<h3>What we inherit, what we wrap</h3>
+
+<p>React DevTools ships its backend as a standalone npm package (<code>react-devtools-core</code>) intended for React Native debugging. We can use this same package directly — connect via WebSocket instead of <code>postMessage</code>, get the same operations.</p>
+
+<pre><code>// Inside the page, injected by the browser subsystem
+import { initialize, connectToDevTools } from "react-devtools-core";
+
+initialize();  // installs __REACT_DEVTOOLS_GLOBAL_HOOK__
+connectToDevTools({
+  host: "localhost",
+  port: 48711,
+  resolveRNStyle: null
+});</code></pre>
+
+<p>On the orchestration server side, we run a tiny WebSocket server on port 48711 that speaks the React DevTools wire protocol. We translate its operations into WDP responses.</p>
+
+<div class="uncertain">
+<p>The React DevTools wire protocol is internal and not formally documented. It's stable enough that the same client/server pair works across many React versions, but it could change without warning. We may need to track Chrome-extension React DevTools releases and bump compat.</p>
+</div>
+
+<h2><span class="num">6.3</span>What we expose via WDP</h2>
+
+<p>Five primary queries:</p>
+
+<pre><code>inspect.componentTree({ sessionId, depth? })
+  → tree of component nodes with names, IDs, parent links
+
+inspect.componentByQuery({ sessionId, query })
+  → resolve a query like "Button containing 'Submit'" to component IDs
+
+inspect.props({ sessionId, componentId })
+  → props object for that specific component instance
+
+inspect.state({ sessionId, componentId })
+  → state values (useState) + reducer state + hook values
+
+inspect.context({ sessionId, componentId })
+  → context values that component reads</code></pre>
+
+<h3>Stable IDs across renders and HMR</h3>
+
+<p>The biggest implementation problem in this domain. React's Fiber objects are not stable — every render produces new ones. The DevTools protocol synthesizes stable IDs from path-in-tree + component name + key, which mostly works but has edge cases when keys change.</p>
+
+<p>For our use case, we need IDs stable enough that the LLM's "the third Button in the list" reference survives:</p>
+<ul>
+  <li>A re-render (Fiber objects replaced)</li>
+  <li>A HMR update (component module replaced)</li>
+  <li>A state change that doesn't structurally reshape the tree</li>
+</ul>
+
+<p>What we do: hash (component-display-name + DOM-position-path + key-if-present) at each commit. Persist these IDs across commits. When the tree restructures significantly, IDs get reassigned and the LLM's references become stale; the digest surfaces a <code>tree_restructured</code> event so the agent knows to re-query.</p>
+
+<div class="uncertain">
+<p>"DOM-position-path" only works for components that render to the DOM. Components that return null, render Portals, or use Fragments make this trickier. Probably good enough for most cases; will need iteration.</p>
+</div>
+
+<h2><span class="num">6.4</span>Example LLM workflow</h2>
+
+<p>To make the value concrete — what the LLM actually does with these tools:</p>
+
+<pre><code>// User: "The UserList shows undefined names. Fix it."
+
+// LLM step 1: see the tree
+tool inspect.componentTree({ sessionId: "main" })
+→ { tree: [
+    { id: "App.1", name: "App", children: [
+      { id: "Layout.1", name: "Layout", children: [
+        { id: "UserList.1", name: "UserList", children: [
+          { id: "User.1", name: "User" },
+          { id: "User.2", name: "User" },
+          { id: "User.3", name: "User" }
+        ]}
+      ]}
+    ]}
+  ]}
+
+// LLM step 2: look at UserList's props and state
+tool inspect.props({ componentId: "UserList.1" })
+→ { props: { users: [
+    { id: 1, fullName: "Alice" },
+    { id: 2, fullName: "Bob" }
+  ]}}
+
+tool inspect.props({ componentId: "User.1" })
+→ { props: { user: { id: 1, fullName: "Alice" }}}
+
+// LLM step 3: look at the source — User component is reading user.name, not user.fullName
+tool files.read({ path: "src/components/User.tsx" })
+→ "...&lt;span&gt;{user.name}&lt;/span&gt;..."
+
+// LLM step 4: fix
+tool files.write({ path: "src/components/User.tsx", content: "...{user.fullName}..." })
+
+// Digest at next turn confirms the HMR update applied and the bug is gone.</code></pre>
+
+<p>Notice: no screenshots, no DOM scraping, no "describe the page" round-trips. The LLM goes directly from "something looks wrong" to "I can see exactly which prop mismatch caused it" in three structured tool calls.</p>
+
+<h2><span class="num">6.5</span>Hook value extraction</h2>
+
+<p>The hardest part. <code>useState</code>, <code>useReducer</code>, <code>useEffect</code>, <code>useMemo</code>, <code>useRef</code>, custom hooks — each has a different shape in the Fiber tree's <code>memoizedState</code> linked list.</p>
+
+<p>React DevTools' backend already does this extraction (the "Hooks" panel). The wire protocol exposes hook values keyed by index. Custom hook names are inferred via static analysis or React's <code>useDebugValue</code>.</p>
+
+<p>We expose hook values in two forms:</p>
+
+<pre><code>// Simple — keyed by index
+inspect.state({ componentId })
+→ { hooks: [
+    { kind: "useState", value: "alice" },
+    { kind: "useState", value: 0 },
+    { kind: "useEffect", deps: [], hasCleanup: true },
+    { kind: "useCustom", name: "useUser", value: { id: 1, ... }}
+  ]}
+
+// Named — when source-map analysis can resolve the variable name
+inspect.stateNamed({ componentId })
+→ { username: "alice", count: 0, currentUser: { id: 1, ... } }</code></pre>
+
+<p>The named version is much more useful to an LLM but requires source-map work. Ship the indexed version first; add named extraction in a later phase.</p>
+
+<div class="uncertain">
+<p>Variable name resolution for hooks involves parsing the component source, matching <code>useState</code> call sites in order, and extracting the destructured names. Doable but tedious; SWC or Babel makes it tractable. Worth doing because it's the difference between "hooks[0] is 'alice'" and "username is 'alice'" in the LLM's eyes.</p>
+</div>
+
+<h2><span class="num">6.6</span>Vue and Svelte: out of scope for v0, sketched here</h2>
+
+<p>Each framework has its own debugging-backend equivalent:</p>
+
+<table>
+  <thead>
+    <tr><th>Framework</th><th>Backend</th><th>Tree concept</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>React</td><td>react-devtools-core</td><td>Fiber tree, hooks, context</td></tr>
+    <tr><td>Vue 3</td><td>vue-devtools backend</td><td>Component tree, refs, reactive state</td></tr>
+    <tr><td>Svelte</td><td>svelte-devtools backend</td><td>Component tree, stores</td></tr>
+    <tr><td>Solid</td><td>solid-devtools (separate npm)</td><td>Owner graph, signals</td></tr>
+  </tbody>
+</table>
+
+<p>The pattern is the same — install a backend in the page, expose a tree of components with state. The orchestration server's WDP <code>inspect.*</code> methods stay framework-agnostic; the adapter underneath changes.</p>
+
+<p>For v0, React only. Vue and Svelte are post-MVP; community contribution or paid customer pull will decide order.</p>
+
+<h2><span class="num">6.7</span>Where this breaks</h2>
+
+<p>Honest about what won't work:</p>
+
+<p><strong>Production builds with minified component names.</strong> If the LLM is debugging a production-built React app, component names become <code>r</code>, <code>i</code>, <code>p</code>. We can still expose the tree, but the LLM can't reason about it semantically. The user's project is dev-mode by default, so this is mostly fine.</p>
+
+<p><strong>Server Components.</strong> Next.js RSC, Remix loaders, and Astro server islands all run server-side. The Fiber tree the browser sees is a snapshot, not a live source. We can introspect the rendered output but not the server-side render. Useful but partial.</p>
+
+<p><strong>Compiled-away components.</strong> Svelte and Solid compile components to inline code. Their "component tree" is reconstructed by the devtools backend from runtime instrumentation, which means the tree is less rich than React's. Less powerful introspection.</p>
+
+<p><strong>Streaming UI / Suspense boundaries.</strong> A component that's still suspending doesn't have a stable tree state. We surface a <code>suspended</code> flag and the LLM should treat it as a special case.</p>
+
+<h2><span class="num">6.8</span>Performance</h2>
+
+<p>The tree walk is fast — React DevTools does it in real time in the browser DevTools panel without noticeable lag. Expect &lt;20ms for trees of a few hundred components.</p>
+
+<p>Where it gets slow: serializing large props objects to JSON for transmission over WDP. A component receiving a 50KB array prop will pay for that serialization on every query.</p>
+
+<p>Mitigation: lazy serialization. Tree responses don't include props; props are queried per-component on demand. Large props are summarized (array length, sample of first N items) by default with a <code>verbose</code> flag for full content.</p>
+
+<h2><span class="num">6.9</span>The broader vision</h2>
+
+<p>Once component-tree introspection is shipped, several extensions become natural:</p>
+
+<ul>
+  <li><strong>Time travel.</strong> Snapshot the component tree at each commit; let the LLM step back to "what did the tree look like before the bug appeared?"</li>
+  <li><strong>Why-did-you-render.</strong> Automatically attribute renders to prop/state/context changes; surface unexpected renders to the LLM</li>
+  <li><strong>Cross-references.</strong> "Find all components reading from this Context" or "all components that call this hook"</li>
+  <li><strong>Visual + structural correlation.</strong> Map a screenshot region back to the component instance that rendered it (this is what the React DevTools "Inspect" mode does)</li>
+</ul>
+
+<p>All of these are post-MVP, but each one is straightforward once the introspection backbone is in place.</p>
+
+<nav class="nav-foot">
+  <a href="05-subsystems.html">
+    <span class="label">← Previous</span>
+    <span class="title">Subsystems</span>
+  </a>
+  <a href="07-roadmap.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Roadmap</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 06 · framework introspection</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

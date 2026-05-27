@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lightweight browser — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 04 · Lightweight browser</span>
+</div>
+
+<h1>Lightweight <span class="roman">browser</span></h1>
+
+<p class="lede">A purpose-built headless browser that skips the rendering pipeline entirely. Boots in well under a second, takes a fraction of the RAM, exposes a CDP-compatible API for migration. The wedge over Playwright + Chromium is iteration speed in the LLM dev loop.</p>
+
+<h2><span class="num">4.1</span>The build-vs-fork-vs-use decision</h2>
+
+<p>Three options, with very different cost profiles:</p>
+
+<table>
+  <thead>
+    <tr><th>Option</th><th>Time to ship</th><th>Maintenance burden</th><th>Compatibility</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Build from scratch</td><td>2+ years</td><td>Forever</td><td>You decide what works</td></tr>
+    <tr><td>Fork Servo + assemble</td><td>4-6 months</td><td>Heavy</td><td>Servo's; partial</td></tr>
+    <tr><td>Fork Lightpanda</td><td>4-8 weeks</td><td>Moderate</td><td>Lightpanda's; growing</td></tr>
+    <tr><td>Use stock Lightpanda</td><td>Days</td><td>Light</td><td>Lightpanda's; incomplete</td></tr>
+    <tr><td>Wrap headless Chromium</td><td>Days</td><td>Light, until you want stealth</td><td>Full</td></tr>
+  </tbody>
+</table>
+
+<p>My recommendation: <strong>start with stock Lightpanda</strong>, wrap it in the WDP browser subsystem boundary, and only fork when you hit a specific limitation that's worth the cost.</p>
+
+<div class="honest">
+<p>"Use Lightpanda" is the right v0 answer. "Fork Lightpanda" might be the right v1 answer. "Build from scratch" is almost certainly never the right answer for this product — the cost is enormous and the differentiation lives in the orchestration layer, not the browser binary.</p>
+</div>
+
+<h2><span class="num">4.2</span>What Lightpanda actually is</h2>
+
+<p>Lightpanda is a headless browser written in Zig, embedding V8, with no layout or paint pipeline. It's explicitly positioned for AI agent and scraping use cases. Open source under Apache 2.0. Claims (their numbers): 9x faster than headless Chrome, 11x less memory.</p>
+
+<p>It's young — first public release in 2024, still finding its production footing. Web compatibility is a long tail. But the <em>architecture</em> is exactly what this product wants.</p>
+
+<p>What Lightpanda includes:</p>
+<ul>
+  <li>HTML parsing (compatible with WHATWG spec)</li>
+  <li>DOM with the standard interfaces</li>
+  <li>V8 for JavaScript execution</li>
+  <li>Networking (HTTP/HTTPS, cookies)</li>
+  <li>A subset of Web APIs (fetch, XHR, localStorage, basic events)</li>
+  <li>CDP-compatible interface for Playwright clients</li>
+</ul>
+
+<p>What Lightpanda skips:</p>
+<ul>
+  <li>Layout engine (no positions, no <code>getBoundingClientRect</code> values that match real Chrome)</li>
+  <li>Paint and compositor</li>
+  <li>GPU stack</li>
+  <li>Media (WebRTC, video, Web Audio)</li>
+  <li>Service workers (partial)</li>
+  <li>Most non-essential Web APIs</li>
+</ul>
+
+<h2><span class="num">4.3</span>What we keep, what we cut, what we add</h2>
+
+<p>The orchestration server's browser subsystem boundary lets us shape what's exposed to the LLM, independently of Lightpanda's underlying capabilities.</p>
+
+<h4>Keep as-is</h4>
+<p>DOM access, JS evaluation, network requests, console messages, cookies, localStorage. These are the bread-and-butter operations for LLM agents, and Lightpanda implements them well.</p>
+
+<h4>Wrap with semantic helpers</h4>
+<p>Instead of exposing raw DOM, we expose a <em>semantic tree</em>: text content, ARIA roles, computed visibility, form state, interactive-element annotations. This is 10-50× cheaper than a screenshot or full DOM dump, and more legible to the LLM. The raw DOM remains available as an escape hatch.</p>
+
+<h4>Stub gracefully</h4>
+<p>WebGL, WebRTC, Sensors, Geolocation — these need to not crash when sites probe for them. We return sensible defaults (WebGL unsupported, Geolocation denied, etc.). Sites that critically depend on these will break; we accept that and document it.</p>
+
+<h4>Add: hot-reload integration</h4>
+<p>The single most valuable addition over stock Lightpanda. When Vite's HMR endpoint fires an update, the browser subsystem applies it directly to the running session, without a full reload. This is what makes the dev-loop integration tight. Requires hooking into Vite's HMR client code or replicating its protocol.</p>
+
+<h4>Add: framework introspection hooks</h4>
+<p>Inject the React DevTools backend (or Vue's equivalent) at page load. Expose component tree, props, state via the inspect.* methods. Covered in <a href="06-framework-introspection.html">section 06</a>.</p>
+
+<div class="uncertain">
+<p>The HMR integration is non-trivial. Vite's HMR client code is JS that runs in the page, but it expects to be in a real browser with full WebSocket and module support. Some of this comes for free from Lightpanda; some doesn't. May need to write a custom HMR client tailored to the lightweight engine.</p>
+</div>
+
+<h2><span class="num">4.4</span>Performance targets</h2>
+
+<p>These are aspirational. Reality may be 2× worse and the product still wins.</p>
+
+<table>
+  <thead>
+    <tr><th>Metric</th><th>Headless Chrome</th><th>Target</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Cold start (binary launch to first command)</td><td>2-5s</td><td>&lt; 200ms</td></tr>
+    <tr><td>RAM per browser context (idle)</td><td>200-500MB</td><td>&lt; 50MB</td></tr>
+    <tr><td>Time to navigate + DOM ready</td><td>500ms-2s</td><td>&lt; 100ms (localhost)</td></tr>
+    <tr><td>DOM snapshot to LLM-readable digest</td><td>~1s + tokens</td><td>&lt; 20ms</td></tr>
+    <tr><td>HMR update applied</td><td>200-500ms via reload</td><td>&lt; 30ms in-place</td></tr>
+  </tbody>
+</table>
+
+<div class="uncertain">
+<p>The cold-start target depends on V8 initialization, which is the dominant cost in Lightpanda's startup. V8 isolates take ~50ms to initialize from scratch even in optimal conditions. Reusing a warm isolate via snapshot-based startup gets us under 200ms but adds complexity. May need to be a daemon-with-pool model instead of process-per-session.</p>
+</div>
+
+<h2><span class="num">4.5</span>The escape hatch to real Chrome</h2>
+
+<p>Some operations require a real browser. The agent needs to verify visual correctness, take a marketing screenshot, or run an interaction that touches a Lightpanda-unsupported API. For these, we keep Playwright + Chromium as an escape hatch:</p>
+
+<pre><code>// Default: cheap, in-memory, no layout
+browser.dom({ sessionId, mode: "semantic" })
+
+// Escape hatch: real Chromium, slow but full-fidelity
+browser.screenshot({ sessionId, engine: "chromium", reason: "visual_verify" })</code></pre>
+
+<p>The orchestration server transparently manages a Chromium pool for these escape-hatch operations. The LLM doesn't think about which engine is which; it just expresses intent and gets the right tool for the job.</p>
+
+<p>Expected mix: 95% Lightpanda, 5% Chromium, by call volume. By wall-clock-time, probably 70/30 since Chromium is much slower per call.</p>
+
+<h2><span class="num">4.6</span>The CDP-compatible facade</h2>
+
+<p>Lightpanda already exposes a CDP-ish API, which is good — Playwright code mostly works against it. We preserve this in our subsystem boundary so that:</p>
+
+<ul>
+  <li>Migration from existing Playwright/Puppeteer code is trivial</li>
+  <li>Power users can drop down to raw CDP when they need to</li>
+  <li>Existing browser tools (extensions, devtools-front-end) work</li>
+</ul>
+
+<p>The semantic tree, framework introspection, and HMR integration are <em>additions</em>, not replacements. CDP-via-Lightpanda is the floor, not the ceiling.</p>
+
+<h2><span class="num">4.7</span>When to fork Lightpanda</h2>
+
+<p>Stay on stock as long as possible. Fork when one of:</p>
+
+<ul>
+  <li>A critical API is missing and PR'ing upstream is slower than forking</li>
+  <li>You need a custom build profile (smaller, smaller-er, with V8 snapshots, etc.)</li>
+  <li>HMR integration requires patches that aren't general-interest</li>
+  <li>You want a build flag that strips features more aggressively than upstream allows</li>
+</ul>
+
+<p>If we fork, the working agreement is: contribute back anything general-purpose. The community is small and benefits from shared improvements.</p>
+
+<h2><span class="num">4.8</span>Alternatives if Lightpanda doesn't pan out</h2>
+
+<p>Plan B: drop down to <strong>Playwright + Chromium with our own perf optimizations</strong>. Snapshot-based isolation, browser pool with reuse, aggressive subprocess management. The orchestration server boundary stays the same; only the implementation behind <code>browser.*</code> changes. Performance is worse but compat is full.</p>
+
+<p>Plan C: <strong>jsdom + a real HTTP client</strong>. No real V8, just jsdom's incomplete DOM running in the same Node process as the orchestration server. Tiny, fast, breaks on anything React-y. Fine for the simplest of cases — Astro static sites, htmx, server-rendered Next pages without hydration.</p>
+
+<p>Plan D: <strong>Camoufox / a Firefox-based engine</strong>. Heavier, but has the advantage of being a different fingerprint surface from Chromium. Useful if a future stealth requirement emerges.</p>
+
+<h2><span class="num">4.9</span>The full subsystem interface</h2>
+
+<p>The browser subsystem exposes this internal API to the orchestration server. WDP's <code>browser.*</code> methods map almost 1:1 to it:</p>
+
+<pre><code>interface BrowserSubsystem {
+  createSession(opts: SessionOpts): Promise&lt;SessionId&gt;
+  closeSession(id: SessionId): Promise&lt;void&gt;
+
+  navigate(id: SessionId, url: string): Promise&lt;NavResult&gt;
+  reload(id: SessionId): Promise&lt;void&gt;
+
+  // Semantic helpers
+  semanticTree(id: SessionId, opts?: TreeOpts): Promise&lt;SemanticTree&gt;
+  describePage(id: SessionId): Promise&lt;PageSummary&gt;
+
+  // Standard
+  dom(id: SessionId, selector?: string): Promise&lt;DomNode[]&gt;
+  evaluate(id: SessionId, expr: string): Promise&lt;EvalResult&gt;
+  click(id: SessionId, selector: string): Promise&lt;void&gt;
+  fill(id: SessionId, selector: string, value: string): Promise&lt;void&gt;
+
+  // Observers (return streams)
+  console(id: SessionId): AsyncIterable&lt;ConsoleMessage&gt;
+  network(id: SessionId): AsyncIterable&lt;NetworkRequest&gt;
+  errors(id: SessionId): AsyncIterable&lt;PageError&gt;
+
+  // HMR integration
+  applyHmrUpdate(id: SessionId, update: HmrUpdate): Promise&lt;void&gt;
+
+  // Escape hatch
+  screenshot(id: SessionId, opts: ScreenshotOpts): Promise&lt;Buffer&gt;
+}</code></pre>
+
+<nav class="nav-foot">
+  <a href="03-protocol.html">
+    <span class="label">← Previous</span>
+    <span class="title">The WDP protocol</span>
+  </a>
+  <a href="05-subsystems.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Subsystems</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 04 · browser</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The WDP protocol — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 03 · The WDP protocol</span>
+</div>
+
+<h1>The <span class="roman">WDP</span> protocol</h1>
+
+<p class="lede">A JSON message protocol over WebSocket. Bidirectional, streaming, typed. Inspired by CDP and LSP, but with a tighter scope and a token-aware payload design — every message considers what an LLM has to read.</p>
+
+<h2><span class="num">3.1</span>Wire format</h2>
+
+<p>WebSocket transport with JSON message framing. Three message kinds:</p>
+
+<pre><code>// Command — client → server
+{
+  "id": 1,
+  "method": "browser.navigate",
+  "params": { "sessionId": "abc", "url": "http://localhost:3000" }
+}
+
+// Response — server → client
+{
+  "id": 1,
+  "result": { "loaderId": "5C9A...", "frameId": "..." }
+}
+
+// Event — server → client, no id
+{
+  "method": "build.completed",
+  "params": { "buildId": "b_42", "duration_ms": 184, "errors": [] }
+}</code></pre>
+
+<p>If you're thinking "that's just CDP with different method names" — yes, that's the point. CDP's wire format is well-thought-out; we steal the pattern wholesale. The difference is in the method surface and the event semantics, not the bytes.</p>
+
+<h3>Why WebSocket, not stdio</h3>
+
+<p>Pi's RPC mode is stdio-based, but the Pi extension speaks WDP over WebSocket to the orchestration server. Reasons:</p>
+
+<ul>
+  <li><strong>Long-lived server.</strong> The orchestration server outlives Pi sessions. WebSocket lets multiple clients attach.</li>
+  <li><strong>Backpressure.</strong> WebSocket has well-defined flow control. Stdio doesn't, and a flood of events can deadlock.</li>
+  <li><strong>Multi-tenant.</strong> Eventually you'll want one server, multiple projects. WebSocket session IDs are the natural disambiguator.</li>
+  <li><strong>Observability.</strong> WebSocket traffic is trivial to inspect via DevTools or a TUI dashboard.</li>
+</ul>
+
+<h2><span class="num">3.2</span>Tool surface</h2>
+
+<p>Methods are grouped by domain, with names borrowed from CDP convention where applicable. The full v0 surface — about 35 methods:</p>
+
+<h3>Domain: <code>session</code></h3>
+<pre><code>session.create(opts)              → { sessionId }
+session.list()                    → { sessions: [...] }
+session.close({ sessionId })      → { closed: boolean }
+session.capabilities()            → { browser, lsp, frameworks, ... }</code></pre>
+
+<h3>Domain: <code>files</code></h3>
+<pre><code>files.read({ path, range? })            → { content, encoding }
+files.write({ path, content })           → { written, build_invalidated }
+files.list({ glob })                     → { paths: [...] }
+files.depGraph({ entry })                → { graph: { nodes, edges } }
+files.watch({ pattern, since? })         → events stream</code></pre>
+
+<h3>Domain: <code>browser</code></h3>
+<pre><code>browser.navigate({ sessionId, url })             → { loaderId }
+browser.dom({ sessionId, selector?, mode })      → { tree | text | aria }
+browser.eval({ sessionId, expression })          → { result, exception? }
+browser.click({ sessionId, selector })           → { dispatched }
+browser.fill({ sessionId, selector, value })     → { dispatched }
+browser.console({ sessionId, since? })           → { messages: [...] }
+browser.network({ sessionId, since? })           → { requests: [...] }
+browser.screenshot({ sessionId, reason })        → { png_b64 }</code></pre>
+
+<h3>Domain: <code>build</code></h3>
+<pre><code>build.status()                          → { state, errors, warnings, buildId }
+build.errors({ since? })                → { errors: [...] }
+build.trigger({ files? })               → { buildId }</code></pre>
+
+<h3>Domain: <code>types</code></h3>
+<pre><code>types.diagnostics({ scope?, since? })   → { diagnostics: [...] }
+types.hoverInfo({ file, line, col })    → { contents, range }
+types.definition({ file, line, col })   → { locations: [...] }
+types.references({ file, line, col })   → { locations: [...] }</code></pre>
+
+<h3>Domain: <code>test</code></h3>
+<pre><code>test.list({ pattern? })                 → { tests: [...] }
+test.run({ pattern?, watch? })          → events + { results }
+test.coverage({ scope? })               → { coverage }</code></pre>
+
+<h3>Domain: <code>lint</code></h3>
+<pre><code>lint.diagnostics({ scope?, since? })    → { diagnostics: [...] }
+lint.fix({ scope? })                    → { fixed: [...], unfixed: [...] }</code></pre>
+
+<h3>Domain: <code>inspect</code> (framework-specific)</h3>
+<pre><code>inspect.componentTree({ sessionId })            → { tree }
+inspect.componentByQuery({ sessionId, query })  → { matches }
+inspect.props({ sessionId, componentId })       → { props }
+inspect.state({ sessionId, componentId })       → { state, hooks }</code></pre>
+
+<h3>Domain: <code>env</code></h3>
+<pre><code>env.digestSinceLastTurn({ sinceTimestamp })     → { events, summary }
+env.detectFramework()                            → { framework, version, config }
+env.routes()                                     → { routes: [...] }</code></pre>
+
+<div class="uncertain">
+<p>The exact method names, parameter shapes, and which events get rolled up into the digest are all things I expect to revise heavily once the first version is in real use. The surface above is the right <em>shape</em> but the details will change. Don't carve any of this in stone before week 4 of the roadmap.</p>
+</div>
+
+<h2><span class="num">3.3</span>Event surface</h2>
+
+<p>Events fire whenever subsystem state changes. The orchestration server buffers and digests them, but a client can also subscribe to the raw stream for debugging:</p>
+
+<pre><code>// File events
+files.changed       { path, kind: "modify" | "create" | "delete" }
+files.dep_changed   { from, to, kind }
+
+// Build events
+build.started       { buildId, trigger }
+build.completed     { buildId, duration_ms, errors, warnings }
+build.failed        { buildId, error }
+
+// Type-system events
+types.diagnostics_changed   { added, removed, modified }
+
+// Dev server events
+hmr.update          { modules, accepted }
+hmr.reload          { reason }
+
+// Browser events
+browser.console     { sessionId, level, text }
+browser.navigated   { sessionId, url, frameId }
+browser.network_failed   { sessionId, url, status }
+
+// Test events
+test.started        { runId, pattern }
+test.result         { runId, name, status, duration_ms, error? }
+test.completed      { runId, passed, failed, total }
+
+// Lint events
+lint.diagnostics_changed   { added, removed }
+
+// Framework events
+inspect.tree_changed   { sessionId, changedNodes }</code></pre>
+
+<h2><span class="num">3.4</span>The digest</h2>
+
+<p>Events stream into the orchestration server continuously, but the LLM only sees them at turn boundaries, in a compact digest. The digest format is the highest-leverage piece of token engineering in this protocol:</p>
+
+<pre><code>// What the LLM sees, injected as a system message
+ENVIRONMENT EVENTS since last turn (2.3s):
+  build: ✓ ok (184ms)
+  types: 2 errors added, 1 fixed
+    src/components/Button.tsx:42 — Type 'string' not assignable to 'number'
+    src/pages/api/user.ts:18 — Property 'email' does not exist on 'User'
+    [fixed] src/utils/date.ts:7 — Argument of type 'unknown'...
+  hmr: 3 updates (Button.tsx, useUser.ts, theme.css)
+  browser-1: 1 console.error
+    [error] Uncaught TypeError: Cannot read property 'map' of undefined
+       at UserList (UserList.tsx:34:12)
+  tests: 1 changed (UserList.test.tsx — was passing, now failing)</code></pre>
+
+<p>Design principles for the digest:</p>
+
+<ul>
+  <li><strong>Token-bounded.</strong> Default budget ~500 tokens. If events exceed it, summarize aggressively and let the LLM ask for detail.</li>
+  <li><strong>Recency-weighted.</strong> Events relevant to recently-edited files come first.</li>
+  <li><strong>Inline summaries before lists.</strong> The LLM should know "2 type errors added" before it reads them.</li>
+  <li><strong>Status icons that read at a glance.</strong> <code>✓</code>, <code>✗</code>, <code>~</code> are denser than "ok / failed / changed".</li>
+</ul>
+
+<div class="uncertain">
+<p>I don't know what the right token budget is. 500 feels about right for typical sessions, but a complex refactor that touches 30 files might genuinely need a richer digest, and a trivial single-file edit needs much less. Probably we want a configurable budget that auto-tunes based on recent context pressure. Worth measuring.</p>
+</div>
+
+<h2><span class="num">3.5</span>Capability negotiation</h2>
+
+<p>Not every project has TypeScript. Not every dev server supports HMR. The orchestration server's <code>session.capabilities()</code> response advertises what's available, and Pi's extension only registers tools the server supports:</p>
+
+<pre><code>{
+  "browser": {
+    "engine": "lightpanda",
+    "version": "0.4.2",
+    "features": ["dom", "js", "fetch", "cookies"],
+    "limitations": ["no-webrtc", "no-webgl", "no-service-workers"]
+  },
+  "lsp": {
+    "typescript": { "version": "5.9.0" },
+    "available": ["typescript", "eslint"],
+    "not_detected": ["rust-analyzer", "pyright"]
+  },
+  "devServer": {
+    "type": "vite",
+    "version": "7.1.0",
+    "hmr": true,
+    "routes_endpoint": false
+  },
+  "framework": {
+    "detected": "react",
+    "version": "19.1.0",
+    "introspection": "react-devtools-backend"
+  },
+  "test": {
+    "runner": "vitest",
+    "version": "3.0.0"
+  }
+}</code></pre>
+
+<p>Tools that depend on un-detected capabilities don't get registered with Pi. The LLM never sees <code>inspect.componentTree</code> in a Vue project that uses React DevTools terminology.</p>
+
+<h2><span class="num">3.6</span>Versioning</h2>
+
+<p>The protocol is versioned at the connection handshake. Clients send their supported version range; the server picks the highest mutually-supported version.</p>
+
+<pre><code>// Handshake (first message client → server)
+{ "method": "$/initialize",
+  "params": { "client": "pi-webdev-extension", "supportedVersions": ["0.x"] }}
+
+// Server response
+{ "result": { "version": "0.1.2", "capabilities": {...} }}</code></pre>
+
+<p>Within 0.x, breaking changes are documented in a CHANGELOG with explicit migration notes. At 1.0, we commit to backward compat within major versions.</p>
+
+<h2><span class="num">3.7</span>Error semantics</h2>
+
+<p>Errors come in three flavors with different recovery behavior:</p>
+
+<table>
+  <thead>
+    <tr><th>Kind</th><th>Code range</th><th>Recovery</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Protocol errors</td><td>-32xxx</td><td>Client bug; should not retry</td></tr>
+    <tr><td>Tool errors</td><td>1xxx</td><td>User/environment error; LLM should adapt</td></tr>
+    <tr><td>Transient errors</td><td>2xxx</td><td>Server should retry with backoff</td></tr>
+  </tbody>
+</table>
+
+<p>Critically — tool errors return enough structured context for the LLM to recover without re-asking. A type error response includes the file path, the line, the diagnostic, AND the suggested action. The agent shouldn't have to make three round-trips to get all the info it needs to fix a problem.</p>
+
+<h2><span class="num">3.8</span>Backpressure</h2>
+
+<p>Event volume can be high — a webpack rebuild can emit hundreds of events in a second. We need to not flood:</p>
+
+<p><strong>Event coalescing.</strong> Within a 100ms window, similar events are merged. Ten <code>files.changed</code> events for ten files become one event with ten paths.</p>
+
+<p><strong>Subscription filtering.</strong> Clients explicitly subscribe to event categories. Pi's extension subscribes to high-level events (build status, type errors, browser console); raw event streams are opt-in for debugging tools.</p>
+
+<p><strong>Digest buffering.</strong> Events stream into a per-session ring buffer; the digest reads from the buffer at turn boundaries. Out-of-order or replay-after-disconnect is supported via event sequence numbers.</p>
+
+<h2><span class="num">3.9</span>What WDP is not</h2>
+
+<p>A few non-goals worth being explicit about:</p>
+
+<p><strong>Not a replacement for LSP.</strong> The orchestration server runs an LSP internally and re-exposes a subset of its capabilities. Direct LSP clients (Neovim, VSCode) talk to <code>tsserver</code> directly, not through WDP.</p>
+
+<p><strong>Not a build system.</strong> We adapt to whatever build tool exists (Vite, webpack, etc.). We don't ship a build tool.</p>
+
+<p><strong>Not a CI tool.</strong> The protocol works fine in CI (run Pi non-interactively, get a digest), but it's not a Jenkins / GitHub Actions integration. That's a layer above.</p>
+
+<p><strong>Not internet-accessible.</strong> WDP is local-only by design. A future "cloud orchestration" might exist, but it'd be a different protocol with different security assumptions.</p>
+
+<nav class="nav-foot">
+  <a href="02-pi-integration.html">
+    <span class="label">← Previous</span>
+    <span class="title">Pi integration</span>
+  </a>
+  <a href="04-browser.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Lightweight browser</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 03 · protocol</span>
+<span>v0.1 · draft</span>
+</div>
+
+</main>
+</body>
+</html>
