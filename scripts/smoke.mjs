@@ -235,6 +235,23 @@ try {
   console.log(`[smoke] build.status ok — ${status.state} (no vite running, as expected)`);
 }
 
+// Week 5 — tsserver-backed types.diagnostics.
+if (caps.capabilities.methods.includes("types.diagnostics")) {
+  // Write a tiny .ts file with a deliberate type error.
+  await client.call("files.write", {
+    path: ".smoke-tmp/types-probe.ts",
+    content: "const n: number = 'not-a-number';\nexport {};\n",
+    createDirs: true,
+  });
+  const diag = await client.call("types.diagnostics", { files: [".smoke-tmp/types-probe.ts"] });
+  assert.ok(Array.isArray(diag.diagnostics), "diagnostics array");
+  const semantic = diag.diagnostics.find((d) => d.code === 2322); // TS2322 "Type X is not assignable to Y"
+  assert.ok(semantic, `expected TS2322; got ${JSON.stringify(diag.diagnostics)}`);
+  console.log(`[smoke] types.diagnostics ok — ${diag.diagnostics.length} diag(s), top: ${semantic.text.slice(0, 80)}`);
+} else {
+  console.log("[smoke] tsserver subsystem not registered — skipping types flow");
+}
+
 // Browser subsystem checks — skipped if Lightpanda wasn't detected at startup.
 const hasBrowser = caps.capabilities.methods.includes("browser.navigate");
 if (!hasBrowser) {

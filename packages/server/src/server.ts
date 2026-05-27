@@ -2,7 +2,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
+
+const localRequire = createRequire(import.meta.url);
 import { Dispatcher } from "./dispatcher.js";
 import { WdpConnection } from "./transport/connection.js";
 import { SubsystemRegistry } from "./subsystems/registry.js";
@@ -13,6 +16,7 @@ import { DigestService } from "./domain/digest.js";
 import { FilesSubsystem, registerFilesSubsystem } from "./subsystems/files.js";
 import { BrowserSubsystem, registerBrowserSubsystem } from "./subsystems/browser/index.js";
 import { ViteAdapter, registerViteAdapter } from "./subsystems/vite.js";
+import { TsServerSubsystem, registerTsServerSubsystem } from "./subsystems/tsserver.js";
 import {
   BuildEventMethods,
   EventMethods,
@@ -99,6 +103,17 @@ export class Server {
     files.events.on("changed", (entries: FilesChangeEntry[]) => {
       this.broadcast("files.changed", { entries });
     });
+
+    // TypeScript LSP — auto-registers when tsserver is resolvable (any
+    // ts/tsx file or tsconfig in the project will exercise it).
+    if (resolveTsserverScript(this.opts.projectRoot)) {
+      const ts = new TsServerSubsystem({ projectRoot: this.opts.projectRoot });
+      this.subsystems.register(ts);
+      registerTsServerSubsystem(this.dispatcher, ts);
+      ts.events.on("diagnostics", (params) => {
+        this.broadcast("types.diagnostics_changed", params);
+      });
+    }
 
     if (opts.vite !== false) {
       const viteOpts: { probeUrl?: string } = {};
@@ -275,6 +290,17 @@ function resolveInPath(name: string): string | null {
     }
   }
   return null;
+}
+
+function resolveTsserverScript(projectRoot: string): string | null {
+  // Try project-local first, then this package's own node_modules graph.
+  const local = path.join(projectRoot, "node_modules", "typescript", "lib", "tsserver.js");
+  if (existsSync(local)) return local;
+  try {
+    return localRequire.resolve("typescript/lib/tsserver.js");
+  } catch {
+    return null;
+  }
 }
 
 function readBinaryVersion(binary: string): string | null {
