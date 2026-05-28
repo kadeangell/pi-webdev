@@ -1,10 +1,19 @@
 {
   "name": "@pi-webdev/coding-agent",
   "version": "0.1.0",
-  "private": true,
+  "description": "Pi extension + WDP client for pi-webdev. Registers browser/files/types tools and injects the per-turn environment digest.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kadeangell/pi-webdev.git",
+    "directory": "packages/pi-extension"
+  },
+  "homepage": "https://github.com/kadeangell/pi-webdev",
+  "keywords": ["pi-webdev", "pi", "coding-agent", "wdp", "llm"],
+  "publishConfig": { "access": "public" },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

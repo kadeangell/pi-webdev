@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Current state — Pi WebDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main class="page">
+
+<a href="../index.html" class="back">Back to plan</a>
+
+<div class="eyebrow">
+  <span class="dot"></span>
+  <span>Section 10 · Current state · 2026-05-28</span>
+</div>
+
+<h1>Current <span class="roman">state</span></h1>
+
+<p class="lede">The canonical "what works right now" reference. The eight-week MVP from the <a href="07-roadmap.html">roadmap</a> is complete: six subsystems, 34 WDP methods, 37 end-to-end assertions, all running against real Lightpanda, real tsserver, real Vitest, and real ESLint.</p>
+
+<div class="honest">
+<p>This is built software, not a plan. Every method below is registered and dispatchable; every subsystem below boots. The numbers come from <code>pnpm smoke</code> on the merged <code>main</code> branch. What's <em>not</em> here is equally honest — see §10.6.</p>
+</div>
+
+<h2><span class="num">10.1</span>The eight weeks, delivered</h2>
+
+<table>
+  <thead>
+    <tr><th>Week</th><th>Deliverable</th><th>Lands as</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>Foundation</td><td>WebSocket transport, dispatcher, handshake, subsystem registry</td></tr>
+    <tr><td>2</td><td>Browser</td><td>Lightpanda subprocess + 140-line CDP client + sessions</td></tr>
+    <tr><td>3</td><td>Files + Vite</td><td>chokidar watcher, esbuild dep graph, Vite HMR adapter</td></tr>
+    <tr><td>4</td><td>Digest</td><td><code>env.digestSinceLastTurn</code> + per-turn injection</td></tr>
+    <tr><td>5</td><td>Types</td><td>tsserver subprocess + <code>types.*</code></td></tr>
+    <tr><td>6</td><td>Test + lint</td><td>Vitest + ESLint via their Node APIs</td></tr>
+    <tr><td>7</td><td>Introspection</td><td>In-page React inspector + <code>inspect.*</code></td></tr>
+    <tr><td>8</td><td>Release</td><td><code>init</code>, daemon installer, publish-ready packages</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">10.2</span>Packages</h2>
+
+<pre><code>@pi-webdev/shared-types   WDP wire types, capabilities, error codes
+@pi-webdev/server         orchestration server + all six subsystems
+@pi-webdev/coding-agent   Pi extension + WDP client + digest injection
+@pi-webdev/cli            pi-webdev binary (init / daemon / serve / drive)</code></pre>
+
+<p>All four carry publish metadata (description, license, repository, <code>publishConfig.access: public</code>) and are MIT-licensed. <code>workspace:*</code> internal deps get rewritten to real versions by <code>pnpm publish</code>.</p>
+
+<h2><span class="num">10.3</span>Subsystems</h2>
+
+<table>
+  <thead>
+    <tr><th>Subsystem</th><th>Kind</th><th>Backed by</th><th>Auto-registers when</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>files</code></td><td>in-process</td><td>chokidar + esbuild</td><td>always</td></tr>
+    <tr><td><code>browser</code></td><td>subprocess</td><td>Lightpanda (CDP)</td><td><code>lightpanda</code> in PATH / <code>LIGHTPANDA_BIN</code></td></tr>
+    <tr><td><code>vite</code></td><td>in-process</td><td>Vite HMR WebSocket</td><td>unless disabled</td></tr>
+    <tr><td><code>tsserver</code></td><td>subprocess</td><td>TypeScript tsserver</td><td><code>typescript</code> resolvable</td></tr>
+    <tr><td><code>vitest</code></td><td>in-process</td><td>Vitest Node API</td><td><code>vitest</code> in project</td></tr>
+    <tr><td><code>eslint</code></td><td>in-process</td><td>ESLint Node API</td><td><code>eslint</code> in project</td></tr>
+  </tbody>
+</table>
+
+<p>The registry supervises both flavours through the same <code>start / stop / heartbeat</code> contract. Subsystems that can't initialise (missing binary, unreachable dev server) report <code>crashed</code> or stay <code>disconnected</code> rather than failing server startup — the server always comes up.</p>
+
+<h2><span class="num">10.4</span>The WDP method surface — 34 methods</h2>
+
+<h3>Lifecycle &amp; environment</h3>
+<pre><code>$/initialize                     handshake + capability snapshot
+$/ping                           liveness + RTT
+session.capabilities             full capability snapshot
+session.subsystems               live subsystem states
+session.create / list / close    browser session lifecycle
+env.digestSinceLastTurn          per-turn event digest (token-bounded)
+env.detectFramework              cached framework detection</code></pre>
+
+<h3>Files</h3>
+<pre><code>files.read                       utf8/base64, range, 1 MiB cap
+files.write                      traversal-guarded, optional createDirs
+files.list                       glob + ignore rules
+files.changedSince               chokidar ring-buffer query
+files.depGraph                   esbuild metafile import graph</code></pre>
+
+<h3>Browser</h3>
+<pre><code>browser.navigate                 waits for load event
+browser.dom                      text / html / aria modes
+browser.eval                     returnByValue, awaitPromise
+browser.click / fill             selector → Runtime.evaluate, NotFound on miss
+browser.console                  ring-buffered console capture</code></pre>
+
+<h3>Build, types, test, lint</h3>
+<pre><code>build.status / connect / disconnect    Vite HMR adapter
+types.diagnostics                      tsserver geterr (merged by source)
+types.hoverInfo / definition / references
+test.list / test.run                   Vitest, structured failures
+lint.diagnostics                       ESLint, normalised messages</code></pre>
+
+<h3>Framework introspection (React)</h3>
+<pre><code>inspect.componentTree            named-component fiber tree
+inspect.componentByQuery         substring / regex name match
+inspect.props                    value-by-value props snapshot
+inspect.state                    class state + indexed hook values</code></pre>
+
+<h3>Events (broadcast, recorded by the digest)</h3>
+<pre><code>files.changed · build.completed · build.failed · hmr.update
+types.diagnostics_changed · test.started · test.completed
+lint.diagnostics_changed · $/subsystem.status · $/serverReady</code></pre>
+
+<h2><span class="num">10.5</span>Install &amp; run</h2>
+
+<pre><code># Build from source (Node 22+, pnpm 10+)
+pnpm install &amp;&amp; pnpm -r run build
+
+# Optional: install Lightpanda for the browser subsystem
+#   https://lightpanda.io — drop the binary in PATH or set LIGHTPANDA_BIN
+
+# Set up a project
+pi-webdev init                  # detect stack, write pi-webdev.config.json
+pi-webdev daemon install        # systemd (Linux) / launchd (macOS) unit
+pi-webdev serve                 # …or run in the foreground
+
+# Drive it
+pi-webdev --auto caps                          # one-shot, ephemeral server
+pi-webdev --auto browser eval URL "document.title"
+pnpm smoke                                     # 37-assertion end-to-end run</code></pre>
+
+<h2><span class="num">10.6</span>Honest gaps</h2>
+
+<p>What an 0.1 explicitly does <em>not</em> do yet:</p>
+
+<ul>
+  <li><strong>The Pi extension binds a stub host.</strong> It implements the documented <code>defineExtension</code> shape but doesn't yet import Pi's real package — that waits on pinning a Pi version and reading its source (roadmap §7.8 step 1).</li>
+  <li><strong>One browser target per process.</strong> Lightpanda rejects a second <code>Target.createTarget</code> with <code>TargetAlreadyLoaded</code>; sessions are effectively serial for now.</li>
+  <li><strong>No layout in the browser.</strong> Lightpanda gives DOM + JS but no rendered geometry — <code>browser.dom</code> text isn't whitespace-accurate, and there are no click coordinates or screenshots.</li>
+  <li><strong>Hook values are indexed, not named.</strong> <code>inspect.state</code> returns <code>hooks[0]=7</code>, not <code>count=7</code>; source-map-aware naming is 0.2.</li>
+  <li><strong>Single tsserver, inferred-project mode.</strong> Per-tsconfig isolation isn't implemented.</li>
+  <li><strong>Restart-with-backoff is off.</strong> The registry tracks crashes but doesn't auto-restart yet — no real crash data to tune against.</li>
+  <li><strong>Not published to npm.</strong> Packages are publish-<em>ready</em>; the actual <code>pnpm publish</code> is a deliberate, credentialed step left to the maintainer.</li>
+</ul>
+
+<p>The <a href="07-roadmap.html#future">future roadmap</a> sequences these against new capability.</p>
+
+<nav class="nav-foot">
+  <a href="09-demo.html">
+    <span class="label">← Previous</span>
+    <span class="title">Demo</span>
+  </a>
+  <a href="07-roadmap.html" class="next">
+    <span class="label">Next →</span>
+    <span class="title">Roadmap</span>
+  </a>
+</nav>
+
+<div class="footer">
+<span>pi-webdev / 10 · current state</span>
+<span>v0.1 · complete</span>
+</div>
+
+</main>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 An orchestration system for LLM-driven web development. Built on top of [Pi](https://pi.dev), with a custom protocol that goes beyond CDP — adding file system state, type errors, build status, HMR events, test output, and framework-level component introspection to what a coding agent can see.
 
-This repository contains **the plan plus a live foundation**. Phase 1 Week 1 of the roadmap is in — the orchestration server speaks WDP over WebSocket, the Pi extension client handshakes and round-trips. See [`docs/00-progress.html`](docs/00-progress.html) for the running changelog.
+The **eight-week MVP is complete**. Six subsystems (Lightpanda browser, file watcher, TypeScript LSP, Vite, Vitest, ESLint), 34 WDP methods, React component introspection, a per-turn event digest, and a `pi-webdev` CLI with `init` + daemon installer — 37 end-to-end smoke assertions, all green. See [`docs/10-status.html`](docs/10-status.html) for the full inventory and [`docs/00-progress.html`](docs/00-progress.html) for the build trail.
 
 ## Read
 
@@ -20,26 +20,33 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-## Run the foundation
+## Build & run
 
-Requires Node 22+ and pnpm 10+.
+Requires Node 22+ and pnpm 10+. For the browser subsystem, install [Lightpanda](https://lightpanda.io) and put it in `PATH` (or set `LIGHTPANDA_BIN`).
 
 ```sh
 pnpm install
 pnpm -r run build
-pnpm smoke                   # 14-assertion end-to-end test
+pnpm smoke                   # 37-assertion end-to-end test
 ```
 
-The `pi-webdev` CLI talks to a running server, or boots an in-process one with `--auto`:
+Set up a project and run the server continuously:
+
+```sh
+pi-webdev init               # detect the stack, write pi-webdev.config.json
+pi-webdev daemon install     # systemd (Linux) / launchd (macOS) unit
+pi-webdev serve              # …or run in the foreground
+```
+
+The `pi-webdev` CLI also drives a running server, or boots an in-process one with `--auto`:
 
 ```sh
 node packages/cli/dist/bin.js --auto --project-root examples/counter-app caps
+node packages/cli/dist/bin.js --auto browser eval http://localhost:5173/ "document.title"
 node packages/cli/dist/bin.js --auto --project-root examples/counter-app files list "**/*.tsx"
-node packages/cli/dist/bin.js --auto ping --echo hello
-node packages/cli/dist/bin.js serve --port 48710 --project-root .
 ```
 
-See [`docs/09-demo.html`](docs/09-demo.html) for a captured walkthrough against the bundled React fixture (`examples/counter-app/`). RTT on localhost: ~0.5ms per ping.
+See [`docs/09-demo.html`](docs/09-demo.html) for captured walkthroughs and [`docs/10-status.html`](docs/10-status.html) for the full method surface. RTT on localhost: ~0.5ms per ping.
 
 ## Structure
 
@@ -63,7 +70,8 @@ pi-webdev/
 │   ├── 06-framework-introspection.html  React DevTools backend integration
 │   ├── 07-roadmap.html           Eight-week MVP, phased
 │   ├── 08-risks.html             Where the plan is fragile
-│   └── 09-demo.html              Captured CLI walkthrough against the React fixture
+│   ├── 09-demo.html              Captured CLI walkthrough against the React fixture
+│   └── 10-status.html            Current state: every method, subsystem, install steps, gaps
 ├── examples/
 │   └── counter-app/          Vite + React 19 + Vitest fixture for capability detection
 └── packages/
@@ -75,22 +83,20 @@ pi-webdev/
 
 ## Status
 
-**v0.1 — foundation in, browser subsystem pending.** Seven WDP methods working end-to-end (`$/initialize`, `$/ping`, `session.capabilities`, `session.subsystems`, `files.read`, `files.write`, `files.list`). The browser, dev-server adapter, LSP, test runner, and framework introspection are still on the roadmap (Weeks 2–7).
-
-Every section flags places of uncertainty inline with "Open question" callouts. Section 08 collects the most important ones for the spike phase.
+**v0.1 — eight-week MVP complete.** 34 WDP methods across six subsystems (files, browser, vite, tsserver, vitest, eslint), 37 end-to-end smoke assertions. The post-0.1 plan (0.2 → 0.3 → 1.0 → beyond) is in [`docs/07-roadmap.html`](docs/07-roadmap.html#future). Honest gaps — stub Pi binding, no layout in the browser, indexed (not named) hooks — are tracked in [`docs/10-status.html`](docs/10-status.html).
 
 ## What to read first
 
-- **10 minutes:** [Progress](docs/00-progress.html) for what's actually running, then [Architecture](docs/01-architecture.html) for the full shape.
-- **Considering whether to commit:** [Risks and open questions](docs/08-risks.html) first.
-- **Want to start contributing:** [Roadmap](docs/07-roadmap.html) §7.1 Week 2 — the browser subsystem is the next thing that needs to land.
+- **10 minutes:** [Current state](docs/10-status.html) for everything that works right now, then [Architecture](docs/01-architecture.html) for the shape.
+- **The build trail:** [Progress](docs/00-progress.html) logs each week and what was learned.
+- **Want to start contributing:** the [future roadmap](docs/07-roadmap.html#future) §7.6 — 0.2's top item is the real Pi-extension binding.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). (Proposed default; matches the Pi ecosystem. Change it if another license fits better.)
 
 ## Core thesis
 
 LLM-driven web development is bottlenecked by browser tooling designed for human QA, not autonomous agents. Playwright + headless Chrome eats 2–5 seconds per iteration; tight LLM loops need sub-100ms.
 
-A purpose-built browser (probably [Lightpanda](https://lightpanda.io)) plus a richer protocol that surfaces build state, type errors, dev-server events, and framework-level introspection — wrapped behind a Pi extension — could change what an agent can do in a working session.
-
-## License
-
-The plan is shared as-is. License TBD once there's something to license.
+A purpose-built browser ([Lightpanda](https://lightpanda.io)) plus a richer protocol that surfaces build state, type errors, dev-server events, and framework-level introspection — wrapped behind a Pi extension — changes what an agent can do in a working session.

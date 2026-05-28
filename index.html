@@ -14,14 +14,14 @@
 
 <div class="eyebrow">
   <span class="dot"></span>
-  <span>Working draft · v0.1 · foundation in · written with Claude</span>
+  <span>v0.1 · 8-week MVP complete · written with Claude</span>
 </div>
 
 <h1>Pi <span class="roman">WebDev</span></h1>
 
 <p class="lede">An orchestration system for LLM-driven web development. A custom browser, a unified protocol that goes beyond CDP, and tight integration with the Pi coding agent — so an LLM can iterate on a web project at the speed of the dev server, not the speed of Playwright.</p>
 
-<p>This is a comprehensive plan plus a live foundation. Phase 1 Week 1 of the <a href="docs/07-roadmap.html">roadmap</a> is in — the orchestration server speaks WDP over WebSocket, the Pi extension client handshakes and round-trips. See <a href="docs/00-progress.html">Progress</a> for what's built, what was learned, and what the next iteration tackles.</p>
+<p>This started as a plan and is now built. All eight weeks of the <a href="docs/07-roadmap.html">roadmap</a> are in: six subsystems (Lightpanda browser, file watcher, TypeScript LSP, Vite, Vitest, ESLint), 34 WDP methods, React component introspection, a per-turn event digest, and a <code>pi-webdev</code> CLI with <code>init</code> and a daemon installer — 37 end-to-end smoke assertions, all green. See <a href="docs/10-status.html">Current state</a> for the full inventory, <a href="docs/00-progress.html">Progress</a> for the build trail, and <a href="docs/07-roadmap.html#future">the future roadmap</a> for what's beyond 0.1.</p>
 
 <p>The core thesis is that LLM-driven web development is currently bottlenecked by browser tooling that was designed for human QA engineers, not autonomous agents. Playwright + headless Chrome eats 2-5 seconds per iteration. Tight LLM loops need sub-100ms. A purpose-built browser plus a richer protocol that surfaces build state, type errors, dev-server events, and framework-level introspection — wrapped behind a Pi extension — could change what an agent can do in a working session.</p>
 
@@ -178,43 +178,49 @@
     <span class="num">09</span>
     <div>
       <p class="item-title"><a href="docs/09-demo.html">Demo</a></p>
-      <p class="item-desc">Captured walkthrough of the foundation against a fixture React project. Real CLI output, no mocks.</p>
+      <p class="item-desc">Captured walkthrough against a fixture React project. Real CLI output, no mocks.</p>
+    </div>
+  </li>
+  <li>
+    <span class="num">10</span>
+    <div>
+      <p class="item-title"><a href="docs/10-status.html">Current state</a></p>
+      <p class="item-desc">The canonical "what works right now" reference: every method, every subsystem, install steps, honest gaps.</p>
     </div>
   </li>
 </ol>
 
 <h2><span class="num">02</span>Honest status</h2>
 
-<p>This plan is built on a few bets, some safer than others. Worth being explicit:</p>
+<p>The bets the plan made have now mostly been settled by building. Worth being explicit about how they landed:</p>
 
 <div class="honest">
-<p><strong>Things I'm confident about:</strong> the orchestration-server / protocol layer is well-understood territory. Pi's extension model is real, working, and documented. The dev-loop pain is real — Playwright cold starts and screenshot-driven LLM feedback loops are genuinely slow.</p>
+<p><strong>Confirmed by the build:</strong> the orchestration-server / protocol layer was indeed well-understood — handshake-to-ping RTT is ~0.5ms. Lightpanda's CDP is enough to back all five browser methods plus console capture. React's component tree is walkable from a ~150-line in-page script — no <code>react-devtools-core</code> needed. tsserver, Vitest, and ESLint all integrate cleanly via their existing protocols / Node APIs.</p>
 </div>
 
 <div class="uncertain">
-<p><strong>Things I'm not sure about:</strong></p>
+<p><strong>Still open after 0.1:</strong></p>
 <ul>
-  <li>Whether Lightpanda is production-ready enough to base a product on, or whether you'd need to fork and harden it</li>
-  <li>How much of React DevTools' backend protocol is stable and usable from a third-party — this affects framework introspection</li>
-  <li>Whether sub-100ms cold start is achievable when V8 isolation is the binding constraint</li>
-  <li>Whether Pi will remain the right harness in 12 months, or whether you'd outgrow it</li>
-  <li>How much of the protocol survives first contact with real users</li>
+  <li>Lightpanda's no-layout model and one-target-per-process limit are real constraints — fine for "read and reason," wrong for screenshots / coordinates. A Chromium escape hatch is on the <a href="docs/07-roadmap.html#future">1.0 roadmap</a>.</li>
+  <li>The Pi extension still binds a stub host; the real <code>defineExtension</code> integration is 0.2's top priority.</li>
+  <li>The digest format works but is a first draft — it needs tuning against real session token-cost data.</li>
+  <li>How much of the protocol survives first contact with real users.</li>
 </ul>
 </div>
 
-<p>These are flagged on the relevant pages with the same "Open question" callout style.</p>
+<p>These are tracked honestly in <a href="docs/10-status.html">Current state §10.6</a> and sequenced in the <a href="docs/07-roadmap.html#future">future roadmap</a>.</p>
 
 <h2><span class="num">03</span>What to read first</h2>
 
-<p>If you have 10 minutes: <a href="docs/01-architecture.html">Architecture</a> and <a href="docs/07-roadmap.html">Roadmap</a>. They give you the full shape and the first eight weeks of work.</p>
+<p>If you have 10 minutes: <a href="docs/10-status.html">Current state</a> for everything that works right now, then <a href="docs/01-architecture.html">Architecture</a> for the shape.</p>
 
-<p>If you're considering whether to commit: <a href="docs/08-risks.html">Risks and open questions</a> first. That's where the plan is fragile.</p>
+<p>If you want the build trail: <a href="docs/00-progress.html">Progress</a> logs each week, what was learned, and where the plan shifted under contact with reality.</p>
 
-<p>If you want to start building this week: skip to <a href="docs/07-roadmap.html">Phase 0 of the roadmap</a>. The fastest first artifact is a Pi extension exposing three browser tools against your latest React project — that's the document that tells you what the protocol should actually look like.</p>
+<p>If you want to run it: <a href="docs/10-status.html">Current state §10.5</a> has the install and <code>pi-webdev init</code> / <code>daemon</code> / <code>serve</code> steps; <a href="docs/09-demo.html">the demo</a> has captured CLI transcripts.</p>
 
 <div class="footer">
 <span>pi-webdev / index</span>
-<span>v0.1 · draft</span>
+<span>v0.1 · complete</span>
 </div>
 
 </main>

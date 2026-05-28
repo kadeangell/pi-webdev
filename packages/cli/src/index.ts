@@ -1,5 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { createServer } from "@pi-webdev/server";
 import { WdpClient } from "@pi-webdev/coding-agent/client";
+import { loadConfig } from "./config.js";
+import { runInit } from "./init.js";
+import { daemonInstall, daemonStatus, daemonUninstall } from "./daemon.js";
 
 interface CliFlags {
   url?: string;
@@ -9,6 +13,8 @@ interface CliFlags {
   echo?: string;
   limit?: number;
   session?: string;
+  port?: number;
+  force: boolean;
   positional: string[];
 }
 
@@ -18,6 +24,8 @@ USAGE
   pi-webdev [--url URL | --auto] [--project-root DIR] [--json] <command> [args]
 
 COMMANDS
+  init                            Detect the project and write pi-webdev.config.json.
+  daemon install|uninstall|status Manage the background server (systemd/launchd).
   ping [--echo TEXT]              Round-trip a $/ping. Reports RTT.
   caps                            Print server capability snapshot.
   subsystems                      List subsystems and states.
@@ -47,7 +55,7 @@ EXAMPLES
 `;
 
 function parse(argv: string[]): CliFlags & { command: string } {
-  const flags: CliFlags = { auto: false, projectRoot: process.cwd(), json: false, positional: [] };
+  const flags: CliFlags = { auto: false, projectRoot: process.cwd(), json: false, force: false, positional: [] };
   let command = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -59,11 +67,18 @@ function parse(argv: string[]): CliFlags & { command: string } {
     else if (arg === "--echo" && next) { flags.echo = next; i++; }
     else if (arg === "--limit" && next) { flags.limit = Number(next); i++; }
     else if (arg === "--session" && next) { flags.session = next; i++; }
+    else if (arg === "--port" && next) { flags.port = Number(next); i++; }
+    else if (arg === "--force") { flags.force = true; }
     else if (arg === "--help" || arg === "-h") { command = "help"; }
     else if (!command) { command = arg; }
     else { flags.positional.push(arg); }
   }
   return { ...flags, command };
+}
+
+/** Absolute path to this CLI's bin entrypoint — used by daemon unit files. */
+function selfBinPath(): string {
+  return fileURLToPath(new URL("./bin.js", import.meta.url));
 }
 
 export async function run(argv: string[]): Promise<number> {
@@ -73,8 +88,40 @@ export async function run(argv: string[]): Promise<number> {
     return args.command === "help" ? 0 : 1;
   }
 
+  if (args.command === "init") {
+    return runInit({
+      projectRoot: args.projectRoot,
+      force: args.force,
+      json: args.json,
+      ...(args.port !== undefined ? { port: args.port } : {}),
+    });
+  }
+
+  if (args.command === "daemon") {
+    const sub = args.positional[0];
+    const config = await loadConfig(args.projectRoot);
+    const daemonOpts = {
+      projectRoot: args.projectRoot,
+      port: args.port ?? config?.port ?? 48710,
+      binPath: selfBinPath(),
+      json: args.json,
+    };
+    if (sub === "install") return daemonInstall(daemonOpts);
+    if (sub === "uninstall") return daemonUninstall(daemonOpts);
+    if (sub === "status" || sub === undefined) return daemonStatus(daemonOpts);
+    process.stderr.write(`unknown daemon subcommand: ${sub}\n`);
+    return 2;
+  }
+
   if (args.command === "serve") {
-    const server = await createServer({ projectRoot: args.projectRoot });
+    const config = await loadConfig(args.projectRoot);
+    const serveOpts: Parameters<typeof createServer>[0] = { projectRoot: args.projectRoot };
+    const port = args.port ?? config?.port;
+    if (port !== undefined) serveOpts.port = port;
+    if (config?.host) serveOpts.host = config.host;
+    if (config?.browser !== undefined) serveOpts.browser = config.browser;
+    if (config?.viteProbeUrl) serveOpts.vite = { probeUrl: config.viteProbeUrl };
+    const server = await createServer(serveOpts);
     process.stderr.write(`[pi-webdev] listening at ${server.url}\n`);
     for (const sig of ["SIGINT", "SIGTERM"] as const) {
       process.once(sig, () => server.stop().then(() => process.exit(0)));

@@ -160,17 +160,21 @@
 <p>Week 7 — the differentiating feature — landed against real React 19 running inside real Lightpanda. Smoke test grows to 37 assertions; the new ones bundle React+react-dom inline with esbuild at smoke time, serve a Counter component, navigate Lightpanda, then assert: <code>componentTree</code> contains Counter, <code>inspect.props({componentId})</code> returns <code>{initial: 7}</code>, and <code>inspect.state</code> returns <code>hooks[0].value = 7</code> (the useState initial).</p>
 </div>
 
-<h3>Week 8 — Polish and release</h3>
+<h3>Week 8 — Polish and release <span class="t-edge" style="color: var(--accent)">· done</span></h3>
 <ul>
-  <li><code>pi-webdev init</code> command, daemon installer</li>
-  <li>Docs site (this site, made public)</li>
-  <li>Three high-quality demo videos: "fix a React bug", "add a feature with HMR", "debug a failing test"</li>
-  <li>npm publish: <code>@pi-webdev/server</code> and <code>@pi-webdev/coding-agent</code></li>
-  <li>Public 0.1 release</li>
+  <li><code>pi-webdev init</code> — boots an ephemeral server, runs capability detection, writes <code>pi-webdev.config.json</code> with the detected stack. Lands.</li>
+  <li>Daemon installer — <code>pi-webdev daemon install|uninstall|status</code> generates a systemd user unit (Linux) or launchd plist (macOS) and prints the activation command. Lands.</li>
+  <li>Docs site — this site, with a full <a href="10-status.html">current-state reference</a> and the expanded future roadmap below.</li>
+  <li>Publish-ready packages — all four carry description / license / repository / <code>publishConfig</code> metadata and are MIT-licensed. The actual <code>pnpm publish</code> is a deliberate maintainer step (needs npm auth), left un-run.</li>
+  <li>Demo videos — out of scope for an agent-built milestone; the captured CLI transcripts in <a href="09-demo.html">§09</a> stand in.</li>
 </ul>
 
+<div class="honest">
+<p>Week 8 landed (minus the literal screencasts and the credentialed npm publish). The MVP is complete: six subsystems, 34 WDP methods, 37 smoke assertions, ~4,300 LOC. Full inventory in <a href="10-status.html">section 10</a>; what shipped this week in <a href="00-progress.html">Progress §0.16</a>.</p>
+</div>
+
 <h3>Demo at end of phase 4</h3>
-<p>Public, with a short showreel demonstrating each subsystem doing its part. Open-source the protocol spec and the server. Soft launch on HN, Show HN, relevant Discords.</p>
+<p>The orchestration server drives a real headless browser, type-checker, test runner, linter, file watcher, and React introspector behind one protocol. The protocol spec and server are open (MIT). What remains for a literal "launch" is non-engineering: screencasts, the npm publish, and the HN/Show-HN post.</p>
 
 <h2><span class="num">7.5</span>What's deliberately not in the MVP</h2>
 
@@ -189,21 +193,44 @@
   <li><strong>Code generation skills.</strong> No <code>/generate-component</code> built-ins — leave that to Pi's existing flexibility.</li>
 </ul>
 
-<h2><span class="num">7.6</span>Beyond MVP — direction without commitment</h2>
+<h2 id="future"><span class="num">7.6</span>Future roadmap — post-0.1</h2>
 
-<p>What 0.2 through 1.0 might look like, ordered by likely value:</p>
+<p>The MVP proved the architecture end-to-end. The work below sequences the deferred scope from §7.5 against the gaps surfaced during the build (see <a href="10-status.html">§10.6</a>). Grouped by release, ordered within each by leverage. Nothing here is committed; real usage data reorders it.</p>
 
-<ol>
-  <li>Next.js adapter (clears the biggest single-framework gap)</li>
-  <li>Vue 3 introspection (largest non-React community)</li>
-  <li>Source-map-aware hook naming (large quality-of-life improvement for React)</li>
-  <li>Visual correlation: map a screenshot region back to the component that rendered it</li>
-  <li>Production-build introspection via source maps</li>
-  <li>Cloud orchestration server for Codespaces, Coder, etc.</li>
-  <li>Plugin SDK for community-contributed framework adapters</li>
-</ol>
+<h3>0.2 — Make the MVP trustworthy</h3>
+<p>The theme is hardening what already works rather than adding surface.</p>
+<ul>
+  <li><strong>Real Pi binding.</strong> Replace the stub <code>PiExtensionHost</code> with Pi's actual <code>defineExtension</code>; pin a Pi version; dogfood a real Pi session against a live project. This is the single highest-value item — it turns the demo into a tool.</li>
+  <li><strong>Subsystem restart-with-backoff.</strong> The registry tracks crashes but doesn't recover. Wire exponential backoff with crash-loop detection now that there are real subprocesses (Lightpanda, tsserver) that can actually die.</li>
+  <li><strong>Cross-process heartbeat.</strong> Today's heartbeat checks "is the child alive," not "is it making progress." Add a periodic liveness probe (CDP <code>Browser.getVersion</code>, tsserver <code>status</code>) before running untrusted pages.</li>
+  <li><strong>Digest tuning pass.</strong> Run real sessions, measure token cost vs. agent quality, iterate on the format. The current format is a first draft (doc 03 §3.4).</li>
+  <li><strong>Source-map-aware hook naming.</strong> <code>inspect.state</code> graduates from <code>hooks[0]=7</code> to <code>count=7</code>.</li>
+</ul>
 
-<p>None of these are committed. The MVP usage data will pick the order.</p>
+<h3>0.3 — Widen framework + dev-server coverage</h3>
+<ul>
+  <li><strong>Next.js adapter.</strong> The biggest single-framework gap; needs version-specific work on top of the Vite-shaped <code>build.*</code> surface that already exists.</li>
+  <li><strong>Vue 3 introspection.</strong> Largest non-React community. The <code>inspect.*</code> surface is framework-neutral; this is a second in-page inspector targeting Vue's component instances.</li>
+  <li><strong>Multiple browser targets.</strong> Work around (or upstream a fix for) Lightpanda's one-target-per-process limit, so sessions can run in parallel.</li>
+  <li><strong>Per-tsconfig tsserver isolation.</strong> One tsserver per project boundary, for monorepos with several tsconfigs.</li>
+</ul>
+
+<h3>1.0 — Commit to the protocol</h3>
+<ul>
+  <li><strong>Frozen WDP within a major version.</strong> The wire format and method surface stabilise; breaking changes gated behind a version bump (doc 03 §3.6).</li>
+  <li><strong>SDK + MCP bridge.</strong> Ship the orchestration server as an embeddable library and expose an MCP server so non-Pi agents (Claude Code, custom CLIs) use the same backend (doc 02 §2.7).</li>
+  <li><strong>Chromium escape hatch.</strong> A CDP-compatible adapter that swaps Lightpanda for headless Chromium when a task needs layout, screenshots, or click coordinates — same <code>browser.*</code> surface, different engine.</li>
+  <li><strong>Plugin SDK.</strong> Let the community contribute framework adapters and subsystems against a stable internal contract.</li>
+</ul>
+
+<h3>Beyond 1.0 — new capability</h3>
+<ul>
+  <li><strong>Visual correlation.</strong> Map a screenshot region back to the component that rendered it (needs the Chromium adapter).</li>
+  <li><strong>Production-build introspection</strong> via source maps — inspect a built bundle, not just dev mode.</li>
+  <li><strong>Time-travel.</strong> Component-tree snapshots per commit, queryable retrospectively.</li>
+  <li><strong>Cloud orchestration.</strong> A remote server for Codespaces / Coder / cloud devcontainers — a different security model and a different protocol surface than local-only WDP.</li>
+  <li><strong>Affected-test intelligence.</strong> Promote the <code>files.depGraph</code> + <code>test.run</code> pairing into a first-class "run only what this change touches" mode with reverse-edge caching.</li>
+</ul>
 
 <h2><span class="num">7.7</span>Resource shape</h2>
 
