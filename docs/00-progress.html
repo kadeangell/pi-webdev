@@ -16,18 +16,22 @@
 
 <div class="eyebrow">
   <span class="dot"></span>
-  <span>Section 00 · Progress · updated 2026-05-27</span>
+  <span>Section 00 · Progress · updated 2026-05-28</span>
 </div>
 
 <h1><span class="roman">Progress</span></h1>
 
 <p class="lede">A living log of what's been built against the plan, what was learned along the way, and where the plan has shifted as a result. The other docs are the destination; this one is the trail.</p>
 
+<div class="honest">
+<p><strong>The eight-week MVP is complete.</strong> All of weeks 1–8 are in and merged to <code>main</code>: six subsystems, 34 WDP methods, 37 end-to-end smoke assertions, ~4,300 LOC. For the canonical inventory — every method, every subsystem, install steps, honest gaps — see <a href="10-status.html">section 10, Current state</a>. The post-0.1 plan is in <a href="07-roadmap.html#future">roadmap §7.6</a>. This log keeps the week-by-week trail below.</p>
+</div>
+
 <h2><span class="num">0.1</span>Where we are</h2>
 
-<p>Phase 1 Weeks 1, 2, and 3 are in. The orchestration server supervises three subsystems (in-process files with chokidar + esbuild dep graph, subprocess Lightpanda, Vite adapter), exposes 21 methods, and broadcasts <code>files.changed</code> / <code>hmr.update</code> / <code>build.completed</code> events for digest construction. An LLM (or the human at the <code>pi-webdev</code> CLI) can navigate a real browser, click and fill, observe console output, query the project's dependency graph, and see file changes stream in as events.</p>
+<p>Weeks 1–8 are in. The orchestration server supervises six subsystems (files with chokidar + esbuild, Lightpanda browser, Vite adapter, tsserver, Vitest, ESLint), exposes 34 methods, and broadcasts file / build / HMR / type / test / lint events for digest construction. An LLM (or the human at the <code>pi-webdev</code> CLI) can navigate a real browser, click and fill, read DOM and console, query the dependency graph, run the type-checker / tests / linter, and walk a live React component tree — all behind one protocol. <code>pi-webdev init</code> + <code>daemon install</code> set it up to run continuously.</p>
 
-<p>The smoke test (<code>pnpm smoke</code>) now asserts twenty-seven things end-to-end:</p>
+<p>The smoke test (<code>pnpm smoke</code>) asserts thirty-seven things end-to-end; the earliest twenty-seven are:</p>
 
 <ul>
   <li>Handshake completes with a capabilities snapshot.</li>
@@ -228,7 +232,7 @@ node packages/server/dist/bin.js --port 48710 --project-root .
 
 <h2><span class="num">0.15</span>Where the 8-week MVP stands</h2>
 
-<p>Weeks 1–7 are in:</p>
+<p>All eight weeks are in:</p>
 
 <table>
   <thead>
@@ -242,11 +246,27 @@ node packages/server/dist/bin.js --port 48710 --project-root .
     <tr><td>5</td><td>TypeScript LSP (tsserver)</td><td>✓ done</td></tr>
     <tr><td>6</td><td>Vitest + ESLint subsystems</td><td>✓ done</td></tr>
     <tr><td>7</td><td>React component introspection — the differentiating feature</td><td>✓ done</td></tr>
-    <tr><td>8</td><td><code>pi-webdev init</code>, daemon installer, public 0.1 release</td><td>not started</td></tr>
+    <tr><td>8</td><td><code>pi-webdev init</code>, daemon installer, publish-ready packages</td><td>✓ done</td></tr>
   </tbody>
 </table>
 
 <p>The smoke test asserts 37 things end-to-end. The orchestration server registers 34 WDP methods across six subsystems (files, browser, vite, tsserver, vitest, eslint). Roughly 4,300 LOC of TypeScript across five packages.</p>
+
+<h2><span class="num">0.16</span>Week 8 — init, daemon, release polish</h2>
+
+<p><code>pi-webdev init</code> boots an ephemeral server, runs capability detection, and writes <code>pi-webdev.config.json</code> with the detected stack (verified: react ^19.1.0 / vite ^7.1.0 / typescript / vitest / lightpanda). <code>pi-webdev daemon install|uninstall|status</code> generates a systemd user unit (Linux) or launchd plist (macOS) and prints the activation command. <code>serve</code> now reads the config file for port / host / browser / Vite-probe overrides. All four packages carry publish metadata + MIT license; a root <code>LICENSE</code> landed.</p>
+
+<h3>What was decided</h3>
+
+<p><strong>The daemon installer writes the unit but doesn't activate it.</strong> Activating a user service touches the session manager — a side effect the operator should trigger explicitly, and one that simply doesn't work in containers/CI where no service manager runs. <code>install</code> writes the file and prints the one-liner; the operator runs it. This kept <code>daemon install</code> testable in this very environment.</p>
+
+<p><strong>MIT, as a proposed default.</strong> The README said "License TBD." With shippable software, a license is part of "release." MIT matches the ecosystem (Pi is MIT) and the roadmap's "open-source the protocol spec and the server." It's one file — change it if another license fits better.</p>
+
+<p><strong>Publish-ready, not published.</strong> <code>private: true</code> is gone from the four leaf packages; <code>publishConfig.access: public</code> is in. The actual <code>pnpm publish</code> needs npm auth and is an irreversible, owner-level action — left for the maintainer to run deliberately.</p>
+
+<h2><span class="num">0.17</span>What's next</h2>
+
+<p>The MVP is done; the post-0.1 plan now lives in <a href="07-roadmap.html#future">roadmap §7.6</a>, sequenced 0.2 → 0.3 → 1.0 → beyond. The highest-leverage next step is 0.2's "real Pi binding" — replacing the stub extension host with Pi's actual <code>defineExtension</code> and dogfooding a live session, which turns this from a proven architecture into a daily-driver tool.</p>
 
 <nav class="nav-foot">
   <a href="../index.html">

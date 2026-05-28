@@ -1,9 +1,19 @@
 {
   "name": "@pi-webdev/cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "pi-webdev command line — init a project, run or install the daemon, and drive the orchestration server.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kadeangell/pi-webdev.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/kadeangell/pi-webdev",
+  "keywords": ["pi-webdev", "cli", "wdp"],
+  "publishConfig": { "access": "public" },
+  "engines": { "node": ">=22" },
   "bin": {
     "pi-webdev": "./dist/bin.js"
   },

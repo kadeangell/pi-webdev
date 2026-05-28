@@ -1,10 +1,20 @@
 {
   "name": "@pi-webdev/server",
   "version": "0.1.0",
-  "private": true,
+  "description": "pi-webdev orchestration server — supervises browser (Lightpanda), file watcher, TypeScript LSP, Vite, Vitest, and ESLint subsystems behind the WebDev Protocol.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kadeangell/pi-webdev.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/kadeangell/pi-webdev",
+  "keywords": ["pi-webdev", "wdp", "llm", "coding-agent", "lightpanda", "orchestration"],
+  "publishConfig": { "access": "public" },
+  "engines": { "node": ">=22" },
   "bin": {
     "pi-webdev-server": "./dist/bin.js"
   },
